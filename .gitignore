@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.DS_Store
+
+# Local rollout artifacts and evidence
+.artifacts/
+artifacts/
+rollout-evidence/

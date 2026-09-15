@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEPA — C4 Testnet</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><img class="brand-mark" src="../assets/aephia-logo.webp" alt="Aephia"><div><h1>AEPA</h1><p>Aephia Automation</p></div></div>
+      <nav aria-label="Workspace">
+        <button id="show-fleets" class="nav-item active" aria-controls="fleets-page" aria-current="page"><span>FL</span>Fleets</button>
+        <button id="show-automation" class="nav-item" aria-controls="automation-page"><span>AU</span>Automation</button>
+        <button class="nav-item" disabled><span>LG</span>Activity</button>
+      </nav>
+      <section id="fleet-column-picker" class="column-picker" aria-labelledby="fleet-columns-title">
+        <h2 id="fleet-columns-title">Fleet columns</h2>
+        <div id="fleet-column-selector">
+          <label data-column="fleet">Fleet<input type="checkbox" value="fleet" checked></label>
+          <label data-column="state">State<input type="checkbox" value="state" checked></label>
+          <label data-column="ships">Ships<input type="checkbox" value="ships" checked></label>
+          <label data-column="ownership">Ownership<input type="checkbox" value="ownership" checked></label>
+          <label data-column="address">Fleet address<input type="checkbox" value="address" checked></label>
+          <label data-column="updated">Updated<input type="checkbox" value="updated" checked></label>
+        </div>
+      </section>
+      <div class="sidebar-footer">
+        <button id="open-settings" class="nav-item"><span>ST</span>Settings</button>
+        <div><strong id="version">v—</strong><span class="testnet-pill">C4 TESTNET</span></div>
+      </div>
+    </aside>
+    <main>
+      <header><div><p class="eyebrow">USTUR INSTANCE</p><h2 id="page-title">Fleet Control</h2></div><button id="connect" class="primary">Refresh now</button></header>
+      <section id="fleets-page" class="page-view">
+      <section class="status-grid">
+        <article><span>Network</span><strong id="network">C4 Testnet</strong><small id="rpc-status">Not connected</small></article>
+        <article><span>Player Profile</span><strong id="profile-status">Not configured</strong><small id="character">Character —</small></article>
+        <article><span>Fleets</span><strong id="fleet-count">0</strong><small id="fleet-sync-status">Waiting for first on-chain sync</small></article>
+        <article><span>Automation</span><strong id="automation-mode">Preview only</strong><small id="signer-status">No signer configured; no RPC writes</small></article>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">C4 ACCOUNT STATE</p><h3>My Fleets</h3></div><span id="last-update">No snapshot yet</span></div>
+        <div class="table-wrap"><table><thead><tr id="fleet-head"></tr></thead><tbody id="fleet-rows"></tbody></table></div>
+      </section>
+      </section>
+      <section id="automation-page" class="page-view" hidden>
+      <section id="automation-panel" class="panel automation-panel">
+        <div class="panel-title"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Mining Configuration</h3></div><span class="preview-pill">Configuration preview</span></div>
+        <div id="automation-empty" class="empty route-empty">Connect to load live fleets, faction systems, asteroid belts, and resources.</div>
+        <form id="automation-config" class="automation-config" hidden>
+          <div class="automation-fleet-row">
+            <div class="fleet-row-heading"><span>01</span><strong>Fleet assignment</strong></div>
+            <div class="field-grid compact-field-grid">
+              <label>Fleet<select id="automation-fleet"></select></label>
+              <label>Assignment<select id="automation-assignment"><option value="mining">Mining</option></select></label>
+              <label>Home Starbase<select id="automation-home"></select></label>
+              <label>Resource<select id="automation-resource"></select></label>
+              <label class="destination-field">Mining Destination<small>Region | System | Asteroid belt | Distance</small><select id="automation-destination"></select></label>
+              <label>Travel<select id="automation-travel"><option value="auto">Auto</option><option value="warp">Warp</option><option value="subwarp">Subwarp</option></select></label>
+            </div>
+            <button id="save-assignment" class="secondary compact-save" type="button">Save</button>
+          </div>
+          <div class="configuration-summary"><div><strong id="configuration-route">Select a complete assignment</strong><span id="configuration-detail">Save validates the exact assignment again in the trusted main process.</span></div></div>
+          <div class="live-automation">
+            <div><p class="eyebrow">AUTOMATIC SEND PATH</p><strong id="automatic-status">Disabled</strong><span id="automatic-detail">Dormant by default. Only the proven MF-01 / Eternity / Ioki / Copper loop can be enabled.</span></div>
+            <div class="automation-actions"><button id="enable-automation" class="danger" type="button" disabled>Enable live automation</button><button id="pause-automation" class="secondary" type="button" disabled>Pause automation</button></div>
+          </div>
+          <div id="automation-activity" class="automation-activity">No automatic activity recorded.</div>
+        </form>
+        <div class="subsection-title"><div><p class="eyebrow">ZERO-RESERVE PLAN</p><h3>Copper Mining Loop</h3></div><span class="preview-pill">Preview only</span></div>
+        <div id="route-empty" class="empty route-empty">Connect to calculate the next mining cycle from live C4 state.</div>
+        <div id="route-preview" hidden>
+          <div class="route-line"><strong id="route-path">Eternity → Ioki → Eternity</strong><span id="route-note"></span></div>
+          <div class="metric-grid">
+            <article><span>Food until cargo full</span><strong id="food-cargo">—</strong></article>
+            <article><span>Food until ammo empty</span><strong id="food-ammo">—</strong></article>
+            <article class="selected-metric"><span>Food to load</span><strong id="food-load">—</strong><small id="limit-reason">—</small></article>
+            <article><span>Expected Copper</span><strong id="expected-copper">—</strong></article>
+            <article><span>Mining duration</span><strong id="mining-duration">—</strong></article>
+            <article><span>Dedicated banks</span><strong id="bank-targets">—</strong><small>Ammo bank / Fuel tank</small></article>
+          </div>
+          <p id="rounding-note" class="notice"></p>
+          <div class="simulation-row">
+            <div><strong>Next signed transaction</strong><span id="simulation-result">Not simulated yet; nothing will be submitted</span></div>
+            <button id="simulate-next" class="secondary" type="button">Run signed simulation</button>
+          </div>
+          <pre id="simulation-logs" hidden></pre>
+        </div>
+      </section>
+      </section>
+    </main>
+  </div>
+  <div id="settings-overlay" class="overlay" hidden>
+    <aside class="drawer">
+      <form id="settings-form">
+        <div class="drawer-head"><div><p class="eyebrow">LOCAL CONFIGURATION</p><h2>Settings</h2></div><button id="close-settings" type="button" class="icon">×</button></div>
+        <section><h3>Player Profile</h3><label>Profile address<input id="player-profile" maxlength="44" spellcheck="false" autocomplete="off" placeholder="C4 Player Profile address"></label></section>
+        <section class="signer-settings"><h3>C4 signer private key</h3><label>32- or 64-byte secret-key JSON<input type="password" id="c4-signer-secret" maxlength="4096" spellcheck="false" autocomplete="off" placeholder="[•••] — stored with Windows DPAPI"></label><p class="notice">The key is accepted only when its derived address matches the live active authority of the saved C4 Player Profile. It is encrypted outside SQLite and can never be displayed again.</p><p id="signer-settings-status" class="form-state">No signer configured</p><div class="signer-actions"><button id="store-signer" class="secondary" type="button">Store signer securely</button><button id="remove-signer" class="danger" type="button" disabled>Remove signer</button></div></section>
+        <section><h3>Network</h3><label>Environment<input value="C4 Testnet (z.ink PTR)" disabled></label><p class="notice">AEPA is deliberately locked to testnet for this milestone.</p></section>
+        <section><h3>Connection</h3><label>RPC endpoint<input id="rpc-url" type="url" required spellcheck="false"></label><label>Refresh interval (seconds)<input id="refresh-interval" type="number" min="15" max="3600" required></label></section>
+        <p id="save-state" class="form-state"></p><button class="primary wide" type="submit">Save settings</button>
+      </form>
+    </aside>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
