@@ -13,6 +13,12 @@ import { isPostSubmissionFailure } from '../src/automatic-c4.js';
 import { C4_NETWORK } from '../src/network.js';
 import { authorizeSignerStatus, getSignerStatus, removeStoredSigner, storeAuthorizedSigner, withStoredSigner, type SignerStatus } from '../src/signer-store.js';
 
+// CPU rendering: first-interaction shader compilation on the integrated Intel
+// UHD GPU stalls the compositor for seconds ("Keine Rückmeldung" + ghost
+// window). AEPA is a dashboard; software compositing is visually equivalent
+// and removes the stall entirely. Must run before app is ready.
+app.disableHardwareAcceleration();
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 let database: AepaDatabase;
 let automationRunner: AutomaticCopperRunner;
