@@ -29,15 +29,13 @@ export interface SignedSimulationRpc {
   };
 }
 
-export interface SingleSendRpc extends SignedSimulationRpc {
+export interface SendOnlyRpc {
   sendTransaction(
     transaction: Base64EncodedWireTransaction,
     config: {
       encoding: 'base64';
-      skipPreflight: false;
-      preflightCommitment: 'confirmed';
+      skipPreflight: true;
       maxRetries: 0n;
-      minContextSlot: bigint;
     },
   ): { send(): Promise<string> };
 }
@@ -51,7 +49,8 @@ export interface SignedSimulationResult {
   submitted: false;
 }
 
-export interface SingleSendResult extends Omit<SignedSimulationResult, 'submitted'> {
+export interface SingleSendResult {
+  signature: string;
   submitted: true;
 }
 
@@ -100,14 +99,15 @@ export async function signAndSimulateTransaction(
   });
 }
 
-/** Signs, verifies by simulation, then makes exactly one client submission call.
- * maxRetries=0 also prevents the RPC node from retrying it on our behalf. The
- * caller must never resubmit after an ambiguous response.
- * Sources: https://solana.com/docs/rpc/http/sendtransaction
- *          https://solana.com/docs/rpc/http/getsignaturestatuses
+/** Signs one already-assembled transaction and submits it exactly once without
+ * any client-side or node-preflight simulation. maxRetries=0 prevents the RPC
+ * node from retrying the transaction on our behalf. On-chain failure surfaces
+ * through confirmation polling after submission. The caller must never
+ * resubmit after an ambiguous response.
+ * Source: https://solana.com/docs/rpc/http/sendtransaction
  */
-export async function signSimulateAndSendTransactionOnce(
-  rpc: SingleSendRpc,
+export async function signAndSendTransactionOnce(
+  rpc: SendOnlyRpc,
   transaction: Transaction,
   secretKey: Uint8Array,
   expectedAuthority: string,
@@ -121,32 +121,14 @@ export async function signSimulateAndSendTransactionOnce(
   const wire = getBase64EncodedWireTransaction(signedTransaction);
   const signature = getSignatureFromTransaction(signedTransaction);
   onProgress?.('transaction-signed', { signature });
-  const simulation = await rpc.simulateTransaction(wire, {
-    commitment: 'confirmed',
-    encoding: 'base64',
-    sigVerify: true,
-    replaceRecentBlockhash: false,
-  }).send();
-  const logs = Object.freeze([...(simulation.value.logs ?? [])]);
-  if (simulation.value.err !== null) throw new SignedSimulationFailedError(simulation.value.err, logs);
-  onProgress?.('simulation-passed', { signature, slot: simulation.context.slot.toString() });
 
   onProgress?.('send-starting', { signature });
   const returnedSignature = await rpc.sendTransaction(wire, {
     encoding: 'base64',
-    skipPreflight: false,
-    preflightCommitment: 'confirmed',
+    skipPreflight: true,
     maxRetries: 0n,
-    minContextSlot: simulation.context.slot,
   }).send();
   onProgress?.('send-returned', { signature: returnedSignature });
   if (returnedSignature !== signature) throw new Error('RPC returned a transaction signature different from the signed transaction');
-  return Object.freeze({
-    signature,
-    signatureVerified: true,
-    slot: simulation.context.slot,
-    unitsConsumed: simulation.value.unitsConsumed,
-    logs,
-    submitted: true,
-  });
+  return Object.freeze({ signature, submitted: true } as const);
 }

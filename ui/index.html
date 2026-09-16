@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell" id="app-shell">
     <aside class="sidebar">
       <div class="brand"><img class="brand-mark" src="../assets/aephia-logo.webp" alt="Aephia"><div><h1>AEPA</h1><p>Aephia Automation</p></div></div>
       <nav aria-label="Workspace">
@@ -27,7 +27,8 @@
         </div>
       </section>
       <div class="sidebar-footer">
-        <button id="open-settings" class="nav-item"><span>ST</span>Settings</button>
+        <button id="show-status" class="nav-item"><span>ST</span>Status</button>
+        <button id="open-settings" class="nav-item"><span>SE</span>Settings</button>
         <div><strong id="version">v—</strong><span class="testnet-pill">C4 TESTNET</span></div>
       </div>
     </aside>
@@ -47,7 +48,7 @@
       </section>
       <section id="automation-page" class="page-view" hidden>
       <section id="automation-panel" class="panel automation-panel">
-        <div class="panel-title"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Mining Configuration</h3></div><span class="preview-pill">Configuration preview</span></div>
+        <div class="panel-title config-header"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Mining Configuration</h3></div><div class="config-actions"><button id="cancel-assignment" class="secondary" type="button">Cancel</button><button id="save-assignment" class="primary" type="button">Save</button></div></div>
         <div id="automation-empty" class="empty route-empty">Connect to load live fleets, faction systems, asteroid belts, and resources.</div>
         <form id="automation-config" class="automation-config" hidden>
           <div class="automation-fleet-row">
@@ -60,12 +61,11 @@
               <label class="destination-field">Mining Destination<small>Region | System | Asteroid belt | Distance</small><select id="automation-destination"></select></label>
               <label>Travel<select id="automation-travel"><option value="auto">Auto</option><option value="warp">Warp</option><option value="subwarp">Subwarp</option></select></label>
             </div>
-            <button id="save-assignment" class="secondary compact-save" type="button">Save</button>
           </div>
-          <div class="configuration-summary"><div><strong id="configuration-route">Select a complete assignment</strong><span id="configuration-detail">Save validates the exact assignment again in the trusted main process.</span></div></div>
+          <div class="configuration-summary"><div><strong id="configuration-route">Select a complete assignment</strong><span id="configuration-detail">Save persists the assignment and enables live execution of the proven MF-01 / Eternity / Ioki / Copper loop immediately.</span></div></div>
           <div class="live-automation">
-            <div><p class="eyebrow">AUTOMATIC SEND PATH</p><strong id="automatic-status">Disabled</strong><span id="automatic-detail">Dormant by default. Only the proven MF-01 / Eternity / Ioki / Copper loop can be enabled.</span></div>
-            <div class="automation-actions"><button id="enable-automation" class="danger" type="button" disabled>Enable live automation</button><button id="pause-automation" class="secondary" type="button" disabled>Pause automation</button></div>
+            <div><p class="eyebrow">AUTOMATIC SEND PATH</p><strong id="automatic-status">Disabled</strong><span id="automatic-detail">Saving a fleet assignment enables it automatically. Pause stops the runner safely.</span></div>
+            <div class="automation-actions"><button id="pause-automation" class="secondary" type="button" disabled>Pause automation</button></div>
           </div>
           <div id="automation-activity" class="automation-activity">No automatic activity recorded.</div>
         </form>
@@ -91,6 +91,10 @@
       </section>
       </section>
     </main>
+    <aside id="status-panel" class="status-panel" hidden aria-label="Fleet status">
+      <div class="status-head"><div><p class="eyebrow">LIVE FLEET STATUS</p><h3>Status</h3></div><button id="close-status" class="icon" type="button">×</button></div>
+      <div id="status-fleets" class="status-fleets"></div>
+    </aside>
   </div>
   <div id="settings-overlay" class="overlay" hidden>
     <aside class="drawer">

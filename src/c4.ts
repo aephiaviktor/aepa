@@ -10,7 +10,7 @@ import type { FleetRecord } from './database.js';
 import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
 import { planStartMiningCopper, planStopMiningCopper } from './mining-plans.js';
 import type { AppSettings } from './settings.js';
-import { signAndSimulateTransaction, signSimulateAndSendTransactionOnce } from './signed-simulation.js';
+import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed-simulation.js';
 
 const CARGO_STORAGE_SCALE = 256n;
 const ETERNITY_SYSTEM_ID = 10;
@@ -73,10 +73,15 @@ export interface ServiceBundleSimulation {
   submitted: false;
 }
 
-export interface LiveServiceBundleResult extends Omit<ServiceBundleSimulation, 'submitted'> {
+export interface LiveServiceBundleResult {
+  fleet: 'MF-01';
+  action: 'service-bundle';
+  summary: string;
+  authority: string;
+  keyIndex: number;
+  amounts: Record<keyof ServiceBundleAmounts, string>;
+  plan: unknown;
   transactionSignature: string;
-  signatureVerified: true;
-  simulationSlot: string;
   submitted: true;
   confirmationStatus: 'confirmed' | 'finalized';
   confirmationSlot: string;
@@ -112,10 +117,6 @@ export interface LiveCopperStepResult {
   authority: string;
   keyIndex: number;
   transactionSignature: string;
-  signatureVerified: true;
-  simulationSlot: string;
-  unitsConsumed: string;
-  logs: readonly string[];
   submitted: true;
   confirmationStatus: 'confirmed' | 'finalized';
   confirmationSlot: string;
@@ -401,7 +402,7 @@ export async function executeAuthorizedServiceBundleOnce(
     onProgress?.('fresh-service-verified', { fleet: prepared.fleet.name, authority: prepared.key.authority, ...stringifyServiceAmounts(prepared.amounts) });
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
     onProgress?.('transaction-assembled');
-    const submission = await signSimulateAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;
     while (Date.now() < confirmationDeadline) {
@@ -447,11 +448,9 @@ export async function executeAuthorizedServiceBundleOnce(
       fleet: 'MF-01', action: 'service-bundle', summary: prepared.plan.summary,
       authority: prepared.key.authority, keyIndex: prepared.key.keyIndex,
       amounts: stringifyServiceAmounts(prepared.amounts), transactionSignature: submission.signature,
-      signatureVerified: true, simulationSlot: submission.slot.toString(),
-      unitsConsumed: (submission.unitsConsumed ?? 0n).toString(), logs: submission.logs,
+      plan: prepared.plan.toJSON(),
       submitted: true, confirmationStatus: confirmed.confirmationStatus,
       confirmationSlot: confirmed.slot.toString(), resultingFleetState,
-      plan: prepared.plan.toJSON(),
     };
   } finally {
     await sage.dispose();
@@ -569,7 +568,7 @@ async function executeAuthorizedCopperStepOnce(
 
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
     onProgress?.('transaction-assembled');
-    const submission = await signSimulateAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
 
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;
@@ -621,10 +620,6 @@ async function executeAuthorizedCopperStepOnce(
       authority: prepared.key.authority,
       keyIndex: prepared.key.keyIndex,
       transactionSignature: submission.signature,
-      signatureVerified: true,
-      simulationSlot: submission.slot.toString(),
-      unitsConsumed: (submission.unitsConsumed ?? 0n).toString(),
-      logs: submission.logs,
       submitted: true,
       confirmationStatus: confirmed.confirmationStatus,
       confirmationSlot: confirmed.slot.toString(),

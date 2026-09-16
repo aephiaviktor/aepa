@@ -138,7 +138,21 @@ app.whenReady().then(() => {
     assertAutomationCanReplace(database.getAutomationAssignment());
     const settings = database.getSettings();
     const catalog = await loadMiningAutomationCatalog(settings);
-    return database.saveAutomationAssignment(validateSupportedAutomationAssignment(value, catalog, settings.playerProfile));
+    const assignment = database.saveAutomationAssignment(validateSupportedAutomationAssignment(value, catalog, settings.playerProfile));
+    // Saving a fleet assignment automatically enables live execution. There is
+    // no separate "enable automatic send" step; the runner starts on save.
+    try {
+      assertAutomationCanEnable(assignment);
+      const signer = await getAuthorizedSignerStatus(signerPath);
+      if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
+      if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
+      database.setAutomationEnabled(true);
+      database.recordAutomationActivity({ kind: 'enabled', detail: 'Assignment saved and live execution enabled automatically' });
+      scheduleAutomationTick(0);
+    } catch (error) {
+      database.recordAutomationActivity({ kind: 'disabled', detail: `Assignment saved but not enabled: ${String((error as Error)?.message ?? error)}` });
+    }
+    return automationState();
   });
   ipcMain.handle('automation:set-enabled', async (_event, enabled) => {
     if (typeof enabled !== 'boolean') throw new Error('Automation enabled state must be boolean');

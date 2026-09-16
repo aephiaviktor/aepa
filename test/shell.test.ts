@@ -65,16 +65,21 @@ test('automation workspace exposes the agreed cascading mining configuration', a
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /Region \| System \| Asteroid belt \| Distance/);
-  assert.match(html, /Configuration preview/);
+  assert.match(html, /config-header/);
+  assert.match(html, /id="save-assignment"/);
   assert.match(script, /rankMiningDestinations/);
   assert.match(script, /loadAutomationCatalog/);
   assert.match(preload, /automation:catalog/);
   assert.match(preload, /automation:save/);
   assert.match(preload, /automation:set-enabled/);
-  assert.match(html, /id="enable-automation"/);
+  assert.match(html, /id="show-status"/);
+  assert.match(html, /id="status-panel"/);
+  assert.match(html, /id="cancel-assignment"/);
   assert.match(html, /id="pause-automation"/);
-  assert.match(html, /Dormant by default/);
-  assert.match(script, /setAutomationEnabled\(true\)/);
+  assert.match(html, /enables it automatically/);
+  assert.match(script, /saveAutomationAssignment/);
+  assert.match(script, /setAutomationEnabled\(false\)/);
+  assert.match(script, /renderStatusPanel/);
   assert.match(script, /transaction already submitted to C4 cannot be cancelled/);
   assert.match(html, /class="automation-fleet-row"/);
   assert.match(html, /class="field-grid compact-field-grid"/);

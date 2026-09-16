@@ -84,7 +84,10 @@ function snapshotAge(value) {
   return `${Math.floor(seconds / 3_600)}h old`;
 }
 
+let lastFleetSnapshot;
+
 function renderFleetSnapshot(snapshot) {
+  lastFleetSnapshot = snapshot;
   const key = JSON.stringify([snapshot.sync, snapshot.fleets.map((fleet) => [fleet.address, fleet.updatedAt])]);
   if (key !== lastFleetSnapshotKey) {
     renderFleets(snapshot.fleets);
@@ -137,6 +140,64 @@ function initializeColumnSelector() {
       localStorage.setItem(FLEET_COLUMNS_KEY, JSON.stringify(visibleColumns));
       renderFleets(loadedFleets);
     });
+  }
+}
+
+function setStatusOpen(open) {
+  $('status-panel').hidden = !open;
+  $('app-shell').classList.toggle('status-open', open);
+  $('show-status').classList.toggle('active', open);
+  $('show-status').toggleAttribute('aria-current', open);
+  if (open) renderStatusPanel();
+}
+
+function renderStatusPanel() {
+  const host = $('status-fleets');
+  if (!$('status-panel') || $('status-panel').hidden) return;
+  host.replaceChildren();
+  const fleets = lastFleetSnapshot?.fleets ?? [];
+  if (!fleets.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No fleets loaded yet.';
+    host.append(empty);
+    return;
+  }
+  for (const fleet of fleets) {
+    const row = document.createElement('div');
+    row.className = 'status-fleet';
+    const name = document.createElement('strong');
+    name.textContent = fleet.name;
+    const pill = document.createElement('span');
+    pill.className = `state-pill${fleet.state === 'mining' ? '' : ''}`;
+    pill.textContent = fleet.state;
+    const info = document.createElement('span');
+    info.className = 'status-info';
+    const latest = automationRuntime?.activity?.[0];
+    const age = snapshotAge(lastFleetSnapshot?.sync?.lastSucceededAt || fleet.updatedAt);
+    info.textContent = latest ? `${latest.kind.toUpperCase()} · ${latest.detail}` : `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`;
+    row.append(name, pill, info);
+    host.append(row);
+  }
+}
+
+function restoreSavedAssignment() {
+  const saved = automationRuntime?.assignment;
+  if (saved) {
+    localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify({
+      fleetAddress: saved.fleetAddress,
+      assignment: saved.assignment,
+      homeSystemAddress: saved.homeSystemAddress,
+      resourceId: saved.resourceId,
+      destinationAddress: saved.destinationAddress,
+      travelMode: saved.travelMode,
+    }));
+    if (automationCatalog) renderAutomationCatalog(automationCatalog);
+    $('configuration-detail').textContent = 'Reverted to the previously saved assignments.';
+  } else {
+    localStorage.removeItem(AUTOMATION_DRAFT_KEY);
+    if (automationCatalog) renderAutomationCatalog(automationCatalog);
+    $('configuration-detail').textContent = 'No saved assignment to restore yet.';
   }
 }
 
@@ -200,7 +261,6 @@ function renderAutomationState(state) {
   $('automatic-detail').textContent = assignment?.lastError
     || (assignment ? `${assignment.fleetName} / ${assignment.homeSystemName} / ${assignment.destinationName} / ${assignment.resourceName}` : 'Save the proven MF-01 / Eternity / Ioki / Copper assignment before enabling.');
   const reconciliationRequired = assignment?.status === 'paused';
-  $('enable-automation').disabled = !assignment || running || reconciliationRequired || !signerStatus?.authorizedForProfile;
   $('pause-automation').disabled = !running;
   $('save-assignment').disabled = running || reconciliationRequired || !$('automation-destination').value;
   $('automation-mode').textContent = running ? 'LIVE — running' : assignment?.status === 'paused' ? 'Paused' : 'Disabled';
@@ -246,7 +306,7 @@ function refreshMiningDestinations(preferredDestination, preferredTravelMode) {
     ? `${fleet.name} · ${resource.name} · ${selected.label}`
     : 'No eligible asteroid belt for this configuration';
   $('configuration-detail').textContent = selected?.distance === 0
-    ? 'Same-system assignment; travel is not required. Save keeps it disabled until separately enabled.'
+    ? 'Same-system assignment; travel is not required. Save enables live execution immediately.'
     : 'Travel route is shown for configuration only; automatic execution is not yet supported for this route.';
   $('save-assignment').disabled = !selected || automationRuntime?.assignment?.enabled === true || automationRuntime?.assignment?.status === 'paused';
 }
@@ -327,6 +387,8 @@ async function boot() {
 }
 
 $('open-settings').onclick = () => showSettings(true);
+$('show-status').onclick = () => setStatusOpen($('status-panel').hidden);
+$('close-status').onclick = () => setStatusOpen(false);
 $('show-fleets').onclick = () => setActivePage('fleets');
 $('show-automation').onclick = () => setActivePage('automation');
 $('simulate-next').onclick = simulateNextStep;
@@ -340,21 +402,18 @@ $('save-assignment').onclick = async () => {
   try {
     const draft = selectedAutomationDraft();
     localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify(draft));
-    await window.aepa.saveAutomationAssignment(draft);
-    renderAutomationState(await window.aepa.getAutomationState());
-    $('configuration-detail').textContent = 'Assignment saved disabled. No transaction was submitted.';
+    const state = await window.aepa.saveAutomationAssignment(draft);
+    renderAutomationState(state);
+    $('configuration-detail').textContent = state?.assignment?.enabled
+      ? 'Assignment saved — live execution enabled automatically. No simulation before sends.'
+      : 'Assignment saved, but live execution could not be enabled (see status).';
   } catch (error) {
     $('configuration-detail').textContent = `BLOCKED — ${error.message || String(error)}`;
   } finally {
-    button.disabled = !$('automation-destination').value || automationRuntime?.assignment?.enabled === true || automationRuntime?.assignment?.status === 'paused';
+    button.disabled = automationRuntime?.assignment?.enabled === true || automationRuntime?.assignment?.status === 'paused';
   }
 };
-$('enable-automation').onclick = async () => {
-  if (!window.confirm('Enable LIVE automatic transactions for the saved MF-01 / Eternity / Ioki / Copper assignment? AEPA will simulate before each send, pause on any error, and resume automatically when AEPA restarts until you pause it.')) return;
-  $('automatic-detail').textContent = 'Verifying signer and enabling…';
-  try { renderAutomationState(await window.aepa.setAutomationEnabled(true)); }
-  catch (error) { $('automatic-detail').textContent = `BLOCKED — ${error.message || String(error)}`; }
-};
+$('cancel-assignment').onclick = restoreSavedAssignment;
 $('pause-automation').onclick = async () => {
   if (!window.confirm('Pause Automation? A transaction already submitted to C4 cannot be cancelled, but no following transaction will start.')) return;
   try { renderAutomationState(await window.aepa.setAutomationEnabled(false)); }
@@ -428,6 +487,7 @@ setInterval(async () => {
     const [fleetSnapshot, automation] = await Promise.all([window.aepa.getFleetSnapshot(), window.aepa.getAutomationState()]);
     renderFleetSnapshot(fleetSnapshot);
     renderAutomationState(automation);
+    renderStatusPanel();
   } catch { /* Manual refresh or the next explicit action will surface IPC failures. */ }
 }, 5_000);
 

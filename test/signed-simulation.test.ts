@@ -11,7 +11,7 @@ import {
   type Base64EncodedWireTransaction,
 } from '@solana/kit';
 import { encodeBase58 } from '../src/signer-store.js';
-import { signSimulateAndSendTransactionOnce, signAndSimulateTransaction } from '../src/signed-simulation.js';
+import { signAndSendTransactionOnce, signAndSimulateTransaction } from '../src/signed-simulation.js';
 
 function signerSecret(): Uint8Array {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -64,17 +64,16 @@ test('rejects a signer-authority mismatch before RPC simulation', async () => {
   assert.equal(called, false);
 });
 
-test('simulates successfully before exactly one non-retrying transaction submission', async () => {
+test('submits exactly one non-retrying transaction with no simulation and no RPC preflight', async () => {
   const secret = signerSecret();
   const authority = encodeBase58(secret.subarray(32));
   const calls: string[] = [];
   const progress: string[] = [];
   let sendConfig: unknown;
   const rpc = {
-    simulateTransaction(wire: Base64EncodedWireTransaction, config: unknown) {
+    simulateTransaction() {
       calls.push('simulate');
-      assert.deepEqual(config, { commitment: 'confirmed', encoding: 'base64', sigVerify: true, replaceRecentBlockhash: false });
-      return { send: async () => ({ context: { slot: 51n }, value: { err: null, logs: ['preflight passed'], unitsConsumed: 321n, returnData: null } }) };
+      throw new Error('must not be called');
     },
     sendTransaction(wire: Base64EncodedWireTransaction, config: unknown) {
       calls.push('send');
@@ -83,10 +82,19 @@ test('simulates successfully before exactly one non-retrying transaction submiss
       return { send: async () => signature };
     },
   };
-  const result = await signSimulateAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, authority, (stage) => progress.push(stage));
-  assert.deepEqual(calls, ['simulate', 'send']);
-  assert.deepEqual(progress, ['signer-verified', 'transaction-signed', 'simulation-passed', 'send-starting', 'send-returned']);
-  assert.deepEqual(sendConfig, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0n, minContextSlot: 51n });
+  const result = await signAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, authority, (stage) => progress.push(stage));
+  assert.deepEqual(calls, ['send']);
+  assert.deepEqual(progress, ['signer-verified', 'transaction-signed', 'send-starting', 'send-returned']);
+  assert.deepEqual(sendConfig, { encoding: 'base64', skipPreflight: true, maxRetries: 0n });
   assert.match(result.signature, /^[1-9A-HJ-NP-Za-km-z]+$/);
   assert.equal(result.submitted, true);
+});
+
+test('send-only path rejects a signer-authority mismatch before any RPC call', async () => {
+  const secret = signerSecret();
+  const authority = encodeBase58(secret.subarray(32));
+  let called = false;
+  const rpc = { sendTransaction() { called = true; throw new Error('must not run'); } };
+  await assert.rejects(() => signAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, '11111111111111111111111111111111'), /does not match/);
+  assert.equal(called, false);
 });
