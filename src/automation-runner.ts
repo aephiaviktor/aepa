@@ -1,4 +1,5 @@
 import type { AutomationAssignmentRecord, AepaDatabase } from './database.js';
+import { PLAN_STAGE_MARKER, PlannerStageError } from './c4.js';
 
 export type AutomaticStepOutcome = {
   kind: 'waiting';
@@ -54,7 +55,8 @@ export class AutomaticCopperRunner {
       return { kind: 'confirmed', action: outcome.action, signature: outcome.signature };
     } catch (error) {
       const detail = String((error as Error)?.message ?? error);
-      const reason = `${detail}. Automation paused; chain state must be inspected before any retry.`;
+      const planStage = error instanceof PlannerStageError ? `${PLAN_STAGE_MARKER} ` : '';
+      const reason = `${planStage}${detail}. Automation paused; chain state must be inspected before any retry.`;
       this.database.pauseAutomation(reason);
       this.database.recordAutomationActivity({ kind: 'paused', detail: reason });
       return { kind: 'paused', reason };

@@ -6,10 +6,33 @@ import {
   executeAuthorizedUndockOnce,
   executeAuthorizedUnloadOnce,
   inspectNextCopperStep,
+  PLAN_STAGE_MARKER,
   type AuthorizedLiveAction,
   type LiveCopperStepResult,
 } from './c4.js';
 import type { AppSettings } from './settings.js';
+
+export { PLAN_STAGE_MARKER };
+
+const POST_SUBMISSION_PATTERNS = [
+  /submitted once but confirmation was not observed/i,
+  /must not be resubmitted/i,
+  /confirmed, but .* was not observed within/i,
+];
+
+/** True when a runner error message proves a transaction left this process.
+ * Such pauses must be reconciled out of band and are never auto-cleared.
+ */
+export function isPostSubmissionFailure(message: string): boolean {
+  return POST_SUBMISSION_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/** Marks a pause reason as plan-stage (nothing submitted) unless the message
+ * already proves a submission happened.
+ */
+export function planStageReason(message: string): string {
+  return isPostSubmissionFailure(message) ? message : `${PLAN_STAGE_MARKER} ${message}`;
+}
 
 export type AutomaticCopperStepResult = {
   kind: 'waiting';

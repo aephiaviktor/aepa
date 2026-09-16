@@ -261,6 +261,7 @@ function renderAutomationState(state) {
   $('automatic-detail').textContent = assignment?.lastError
     || (assignment ? `${assignment.fleetName} / ${assignment.homeSystemName} / ${assignment.destinationName} / ${assignment.resourceName}` : 'Save the proven MF-01 / Eternity / Ioki / Copper assignment before enabling.');
   const reconciliationRequired = assignment?.status === 'paused';
+  $('clear-pause').hidden = state?.clearablePause !== true;
   $('pause-automation').disabled = !running;
   $('save-assignment').disabled = running || reconciliationRequired || !$('automation-destination').value;
   $('automation-mode').textContent = running ? 'LIVE — running' : assignment?.status === 'paused' ? 'Paused' : 'Disabled';
@@ -414,6 +415,12 @@ $('save-assignment').onclick = async () => {
   }
 };
 $('cancel-assignment').onclick = restoreSavedAssignment;
+$('clear-pause').onclick = async () => {
+  if (!window.confirm('Clear this spurious pause? It happened while planning a refill, so nothing was submitted. The assignment will return to disabled so you can Save (which re-enables it).')) return;
+  $('automatic-detail').textContent = 'Clearing the spurious pause…';
+  try { renderAutomationState(await window.aepa.clearAutomationPause()); }
+  catch (error) { $('automatic-detail').textContent = `BLOCKED — ${error.message || String(error)}`; }
+};
 $('pause-automation').onclick = async () => {
   if (!window.confirm('Pause Automation? A transaction already submitted to C4 cannot be cancelled, but no following transaction will start.')) return;
   try { renderAutomationState(await window.aepa.setAutomationEnabled(false)); }

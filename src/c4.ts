@@ -10,6 +10,7 @@ import type { FleetRecord } from './database.js';
 import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
 import { planStartMiningCopper, planStopMiningCopper } from './mining-plans.js';
 import type { AppSettings } from './settings.js';
+
 import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed-simulation.js';
 
 const CARGO_STORAGE_SCALE = 256n;
@@ -17,6 +18,48 @@ const ETERNITY_SYSTEM_ID = 10;
 const FLEET_RATE_SCALE = 16_384n;
 const RICHNESS_SCALE = 281_474_976_710_656n;
 const REGION_TRACKER = address('CbwrSoauo4D6HAJY1xuvjgCxHh3999Be68otnbThBQsi');
+
+/** Decoration for runner pauses that happened before anything was submitted.
+ * Only plan-stage pauses may be cleared in-app; post-submission pauses must be
+ * reconciled out of band.
+ */
+export const PLAN_STAGE_MARKER = '[plan-stage]';
+
+/** A failure raised while planning an action, before any transaction was
+ * signed or submitted. Distinguishes safe-to-clear pauses from ambiguous
+ * post-submission outcomes.
+ */
+export class PlannerStageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlannerStageError';
+  }
+}
+
+/** Storage occupied by `foodRaw` raw units of a cargo whose per-unit
+ * storageCost is expressed at the same scale as `CARGO_STORAGE_SCALE`.
+ * Regression: atlas-kit 0.5.0 bills toFleet cargo-hold loads as
+ * `amount x storageCost` without the /256 normalization, so a 13-Food refill
+ * was reported as 3328 raw units against a 249-unit hold.
+ */
+export function calculateCopperLoadStorageRaw(input: { foodRaw: bigint; foodStorageCost: bigint }): bigint {
+  return (input.foodRaw * input.foodStorageCost + CARGO_STORAGE_SCALE - 1n) / CARGO_STORAGE_SCALE;
+}
+
+/** Fails closed unless a cargo-hold Food load fits the Fleet's free storage,
+ * using the same /256 normalization as the service-bundle capacity math.
+ */
+export function assertCopperLoadFitsCargoStorage(input: {
+  cargoCapacityRaw: bigint;
+  cargoUsedRaw: bigint;
+  foodRaw: bigint;
+  foodStorageCost: bigint;
+}): void {
+  const required = calculateCopperLoadStorageRaw({ foodRaw: input.foodRaw, foodStorageCost: input.foodStorageCost });
+  if (input.cargoUsedRaw + required > input.cargoCapacityRaw) {
+    throw new PlannerStageError(`Fleet cargo storage requires ${required.toString()} raw units but only ${(input.cargoCapacityRaw - input.cargoUsedRaw).toString()} are free; reduce the Food load and retry.`);
+  }
+}
 
 export interface CopperLoopPreview {
   fleet: string;
@@ -207,6 +250,77 @@ export async function getActiveC4ProfileAuthority(settings: AppSettings): Promis
   return activeProfileKey(profile).authority;
 }
 
+/** Plans the docked refill (food/ammo/fuel toFleet) with AEPA's own storage
+ * accounting. Regression fix: atlas-kit 0.5.0's toFleet cargo-hold capacity
+ * check bills `amount x storageCost` without the /256 normalization, so a
+ * 13-Food refill was rejected as 3328 raw units against the fleet's 249-unit
+ * hold. This mirrors the service-bundle instruction assembly, which divides
+ * by CARGO_STORAGE_SCALE and is the only capacity math that fits C4 raw units.
+ */
+async function planCopperCargoLoad(
+  sage: ReturnType<typeof createSageClient>,
+  fleet: FleetView,
+  character: Awaited<ReturnType<ReturnType<typeof createSageClient>['characters']['forProfile']>>,
+  authorization: { profile: ReturnType<typeof address>; authority: ReturnType<typeof address>; keyIndex: number },
+  decision: { foodRaw: bigint; ammoRaw: bigint; fuelRaw: bigint },
+): Promise<Plan> {
+  if (fleet.state.kind !== 'docked') throw new PlannerStageError(`Cargo refill requires MF-01 to be docked, not ${fleet.state.kind}`);
+  const system = fleet.state.system.address;
+  const starbasePlayer = await getStarbasePlayerForCharacterAtSystem(sage.context, character.address, system, { commitment: 'confirmed', policy: 'no-store' });
+  const food = await resolveCargo(sage.context, 1);
+  assertCopperLoadFitsCargoStorage({
+    cargoCapacityRaw: fleet.capacities.cargo.total,
+    cargoUsedRaw: fleet.cargoHold.storageCost,
+    foodRaw: decision.foodRaw,
+    foodStorageCost: BigInt(food.storageCost),
+  });
+  if (decision.ammoRaw > 0n && fleet.ammo.amount + decision.ammoRaw > fleet.capacities.ammo.total) {
+    throw new PlannerStageError(`Refill ammo ${decision.ammoRaw.toString()} would exceed the ${fleet.capacities.ammo.total.toString()} Ammo bank capacity`);
+  }
+  if (decision.fuelRaw > 0n && fleet.fuel.amount + decision.fuelRaw > fleet.capacities.fuel.total) {
+    throw new PlannerStageError(`Refill fuel ${decision.fuelRaw.toString()} would exceed the ${fleet.capacities.fuel.total.toString()} Fuel tank capacity`);
+  }
+  for (const [cargoId, required] of [[1, decision.foodRaw], [fleet.ammo.id, decision.ammoRaw], [fleet.fuel.id, decision.fuelRaw]] as const) {
+    if (required <= 0n) continue;
+    const available = starbasePlayer.cargo.items.find((item) => item.id === cargoId)?.quantityRaw ?? 0n;
+    if (available < required) {
+      throw new PlannerStageError(`Starbase cargo id ${String(cargoId)} has ${available.toString()} raw units, but the refill requires ${required.toString()}; refresh the Starbase and retry`);
+    }
+  }
+  const accounts: AccountMeta[] = [
+    { address: authorization.authority, role: AccountRole.READONLY_SIGNER },
+    { address: authorization.profile, role: AccountRole.WRITABLE },
+    { address: address(SAGE_PROGRAM_ADDRESS), role: AccountRole.READONLY },
+    { address: address('C4PRoFNroxxzdgeCoM31LJjYRg7kT6ymogSTAT99iD1u'), role: AccountRole.READONLY },
+    { address: fleet.address, role: AccountRole.WRITABLE },
+    { address: fleet.game, role: AccountRole.READONLY },
+    { address: character.address, role: AccountRole.WRITABLE },
+    { address: system, role: AccountRole.READONLY },
+    { address: starbasePlayer.address, role: AccountRole.WRITABLE },
+  ];
+  const data = getTransferCargoToFleetInstructionDataEncoder().encode({
+    ammoBank: decision.ammoRaw > 0n ? decision.ammoRaw : null,
+    fuelTank: decision.fuelRaw > 0n ? decision.fuelRaw : null,
+    cargoHold: {
+      toLoad: decision.foodRaw > 0n ? [[1, decision.foodRaw]] : [],
+      toUnload: [],
+    },
+    keyIndex: authorization.keyIndex,
+  });
+  const instruction: Instruction = Object.freeze({
+    programAddress: address(SAGE_PROGRAM_ADDRESS),
+    accounts: Object.freeze(accounts),
+    data: data as ReadonlyUint8Array,
+  });
+  const summary = `Refill fleet MF-01 at Starbase Eternity: load ${decision.foodRaw.toString()} Food, ${decision.ammoRaw.toString()} Ammo, and ${decision.fuelRaw.toString()} Fuel.`;
+  return createPlan({
+    kind: 'fleet.refill',
+    summary,
+    preconditions: [],
+    steps: [{ instruction, describes: summary, signers: [authorization.authority] }],
+  });
+}
+
 async function planForDecision(
   sage: ReturnType<typeof createSageClient>,
   fleet: FleetView,
@@ -226,15 +340,7 @@ async function planForDecision(
     return planFleetTransferCargoAtStarbase(sage.context, fleet, { authorization, direction: 'toStarbase', amounts: { cargoHold } });
   }
   if (decision.kind === 'load') {
-    return planFleetTransferCargoAtStarbase(sage.context, fleet, {
-      authorization,
-      direction: 'toFleet',
-      amounts: {
-        ...(decision.ammoRaw > 0n ? { ammo: decision.ammoRaw } : {}),
-        ...(decision.fuelRaw > 0n ? { fuel: decision.fuelRaw } : {}),
-        ...(decision.foodRaw > 0n ? { cargoHold: [{ cargoId: 1, amount: decision.foodRaw }] } : {}),
-      },
-    });
+    return planCopperCargoLoad(sage, fleet, character, authorization, decision);
   }
   if (decision.kind === 'start-mining') {
     return planStartMiningCopper({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [311], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: 'Copper Ore' });

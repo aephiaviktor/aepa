@@ -76,7 +76,10 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   assert.match(html, /id="status-panel"/);
   assert.match(html, /id="cancel-assignment"/);
   assert.match(html, /id="pause-automation"/);
+  assert.match(html, /id="clear-pause"/);
   assert.match(html, /enables it automatically/);
+  assert.match(preload, /clearAutomationPause/);
+  assert.match(script, /clearAutomationPause/);
   assert.match(script, /saveAutomationAssignment/);
   assert.match(script, /setAutomationEnabled\(false\)/);
   assert.match(script, /renderStatusPanel/);

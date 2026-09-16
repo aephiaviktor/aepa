@@ -9,6 +9,7 @@ import { getActiveC4ProfileAuthority, loadC4Fleets, simulateNextCopperStepSigned
 import { AepaDatabase } from '../src/database.js';
 import { FleetSyncCoordinator } from '../src/fleet-sync.js';
 import { CatalogSyncCoordinator } from '../src/catalog-sync.js';
+import { isPostSubmissionFailure } from '../src/automatic-c4.js';
 import { C4_NETWORK } from '../src/network.js';
 import { authorizeSignerStatus, getSignerStatus, removeStoredSigner, storeAuthorizedSigner, withStoredSigner, type SignerStatus } from '../src/signer-store.js';
 
@@ -27,6 +28,7 @@ function automationState() {
       ...assignment,
       targetStopAtUnixSeconds: assignment.targetStopAtUnixSeconds?.toString(),
     } : undefined,
+    clearablePause: assignment?.status === 'paused' && !isPostSubmissionFailure(assignment.lastError ?? ''),
     activity: database.listAutomationActivity(25),
   };
 }
@@ -170,6 +172,16 @@ app.whenReady().then(() => {
       database.setAutomationEnabled(false);
       database.recordAutomationActivity({ kind: 'disabled', detail: 'Automatic execution disabled by the operator' });
     }
+    return automationState();
+  });
+  ipcMain.handle('automation:clear-pause', () => {
+    const assignment = database.getAutomationAssignment();
+    if (!assignment || assignment.status !== 'paused') throw new Error('Automation is not paused');
+    if (isPostSubmissionFailure(assignment.lastError ?? '')) {
+      throw new Error('This pause followed a submitted transaction and requires out-of-band chain-state reconciliation; AEPA will not clear it automatically');
+    }
+    database.setAutomationEnabled(false);
+    database.recordAutomationActivity({ kind: 'disabled', detail: `Plan-stage pause cleared: ${String(assignment.lastError).slice(0, 200)}` });
     return automationState();
   });
   ipcMain.handle('automation:simulate-next', async () => withStoredSigner(
