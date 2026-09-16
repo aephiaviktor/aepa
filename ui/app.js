@@ -67,8 +67,8 @@ function renderFleets(fleets) {
         const mining = column.id === 'state' ? miningPillContent(value) : null;
         pill.textContent = mining ? mining.label : value;
         if (mining) {
-          pill.title = mining.title;
           pill.dataset.miningPill = 'true';
+          bindMiningPill(pill);
         }
         cell.append(pill);
       } else {
@@ -180,8 +180,8 @@ function renderStatusPanel() {
     const mining = miningPillContent(fleet.state);
     pill.textContent = mining ? mining.label : fleet.state;
     if (mining) {
-      pill.title = mining.title;
       pill.dataset.miningPill = 'true';
+      bindMiningPill(pill);
     }
     const info = document.createElement('span');
     info.className = 'status-info';
@@ -345,6 +345,56 @@ function renderAutomationCatalog(catalog) {
   refreshMiningDestinations(draft.destinationAddress, draft.travelMode);
 }
 
+let miningTooltip;
+let miningTooltipAnchor;
+let miningTooltipShownValue;
+
+function ensureMiningTooltip() {
+  if (!miningTooltip) {
+    miningTooltip = document.createElement('div');
+    miningTooltip.className = 'mining-tooltip';
+    miningTooltip.hidden = true;
+    document.body.append(miningTooltip);
+  }
+  return miningTooltip;
+}
+
+function positionMiningTooltip(anchor) {
+  const tip = ensureMiningTooltip();
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(tip.offsetWidth || 240, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+  const top = rect.bottom + 6;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function showMiningTooltip(anchor, title) {
+  const tip = ensureMiningTooltip();
+  miningTooltipAnchor = anchor;
+  miningTooltipShownValue = title;
+  tip.textContent = title;
+  positionMiningTooltip(anchor);
+  tip.hidden = false;
+}
+
+function hideMiningTooltip() {
+  if (!miningTooltip) return;
+  miningTooltip.hidden = true;
+  miningTooltipAnchor = undefined;
+  miningTooltipShownValue = undefined;
+}
+
+function bindMiningPill(pill) {
+  pill.addEventListener('mouseenter', () => {
+    const content = miningPillContent('mining');
+    if (!content?.title) return;
+    showMiningTooltip(pill, content.title);
+  });
+  pill.addEventListener('mouseleave', hideMiningTooltip);
+  pill.addEventListener('blur', hideMiningTooltip);
+}
+
 function miningPillContent(state) {
   if (state !== 'mining') return null;
   const stop = automationRuntime?.assignment?.targetStopAtUnixSeconds;
@@ -367,8 +417,20 @@ function applyMiningPills() {
   for (const pill of document.querySelectorAll('.state-pill[data-mining-pill]')) {
     const content = miningPillContent('mining');
     if (!content) continue;
-    pill.textContent = content.label;
-    pill.title = content.title;
+    if (pill.textContent !== content.label) pill.textContent = content.label;
+  }
+  // While the tooltip is shown (mouse over a mining pill), refresh its live
+  // estimate in place instead of touching the native OS tooltip, which on
+  // Windows rebuilds on every title change and causes "Keine Rückmeldung".
+  if (miningTooltipAnchor) {
+    const content = miningPillContent('mining');
+    if (!content?.title) {
+      hideMiningTooltip();
+    } else if (content.title !== miningTooltipShownValue) {
+      miningTooltipShownValue = content.title;
+      miningTooltip.textContent = content.title;
+      positionMiningTooltip(miningTooltipAnchor);
+    }
   }
 }
 
