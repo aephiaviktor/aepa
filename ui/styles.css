@@ -75,7 +75,7 @@ th { padding: 9px 10px; border-bottom: 1px solid var(--line); color: #69b4d7; te
 td { padding: 12px 10px; border-bottom: 1px solid #0d3452; color: #c6e0ee; }
 td:first-child { color: #fff; font-weight: 750; }
 .empty { padding: 42px !important; color: #73a0bc !important; text-align: center !important; }
-.state-pill { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #074866; color: #7beaff; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.state-pill { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #074866; color: #7beaff; font-size: 9px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
 .state-pill.warning { background: #493a16; color: #f2cd68; }
 .address { max-width: 270px; overflow: hidden; color: #79a5bf; font-family: ui-monospace, SFMono-Regular, monospace; text-overflow: ellipsis; }
 .ships { min-width: 230px; max-width: 420px; line-height: 1.4; }

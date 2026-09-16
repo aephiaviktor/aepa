@@ -1,5 +1,6 @@
 import { formatRegionCode, rankMiningDestinations } from '../dist/src/automation-options.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
+import { estimateCurrentCopper, formatLocalHhmm } from '../dist/src/copper-estimate.js';
 
 const $ = (id) => document.getElementById(id);
 const FLEET_COLUMNS_KEY = 'aepa.fleetColumns.v1';
@@ -11,6 +12,7 @@ let automationCatalog;
 let automationCatalogLoad;
 let automationRuntime;
 let lastFleetSnapshotKey;
+let lastCopperLoopPlan;
 
 function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
@@ -62,7 +64,12 @@ function renderFleets(fleets) {
       if (column.id === 'state' || column.id === 'ownership') {
         const pill = document.createElement('span');
         pill.className = `state-pill${column.id === 'ownership' && value === 'Managed' ? ' warning' : ''}`;
-        pill.textContent = value;
+        const mining = column.id === 'state' ? miningPillContent(value) : null;
+        pill.textContent = mining ? mining.label : value;
+        if (mining) {
+          pill.title = mining.title;
+          pill.dataset.miningPill = 'true';
+        }
         cell.append(pill);
       } else {
         cell.textContent = column.id === 'address' ? short(value) : value;
@@ -169,13 +176,23 @@ function renderStatusPanel() {
     const name = document.createElement('strong');
     name.textContent = fleet.name;
     const pill = document.createElement('span');
-    pill.className = `state-pill${fleet.state === 'mining' ? '' : ''}`;
-    pill.textContent = fleet.state;
+    pill.className = 'state-pill';
+    const mining = miningPillContent(fleet.state);
+    pill.textContent = mining ? mining.label : fleet.state;
+    if (mining) {
+      pill.title = mining.title;
+      pill.dataset.miningPill = 'true';
+    }
     const info = document.createElement('span');
     info.className = 'status-info';
     const latest = automationRuntime?.activity?.[0];
     const age = snapshotAge(lastFleetSnapshot?.sync?.lastSucceededAt || fleet.updatedAt);
-    info.textContent = latest ? `${latest.kind.toUpperCase()} · ${latest.detail}` : `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`;
+    // While mining, the "Mining remains active until …" waiting line is
+    // redundant: the pill already shows the target stop time locally.
+    const waitingLineHidden = mining !== null && latest?.kind === 'waiting' && /Mining remains active until/.test(latest.detail ?? '');
+    info.textContent = waitingLineHidden
+      ? `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`
+      : latest ? `${latest.kind.toUpperCase()} · ${latest.detail}` : `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`;
     row.append(name, pill, info);
     host.append(row);
   }
@@ -266,9 +283,14 @@ function renderAutomationState(state) {
   $('save-assignment').disabled = running || reconciliationRequired || !$('automation-destination').value;
   $('automation-mode').textContent = running ? 'LIVE — running' : assignment?.status === 'paused' ? 'Paused' : 'Disabled';
   const latest = state?.activity?.[0];
-  $('automation-activity').textContent = latest
-    ? `${new Date(latest.occurredAt).toLocaleString()} · ${latest.kind.toUpperCase()}${latest.action ? ` · ${latest.action}` : ''}${latest.signature ? ` · ${short(latest.signature)}` : ''} · ${latest.detail}`
-    : 'No automatic activity recorded.';
+  // While mining, the redundant "Mining remains active until …" waiting line is
+  // hidden: the State pill already shows the durable target stop time locally.
+  const waitingLineHidden = running && latest?.kind === 'waiting' && /Mining remains active until/.test(latest.detail ?? '');
+  $('automation-activity').textContent = waitingLineHidden
+    ? 'Mining in progress — see the fleet State pill for the stop time and live Copper estimate.'
+    : latest
+      ? `${new Date(latest.occurredAt).toLocaleString()} · ${latest.kind.toUpperCase()}${latest.action ? ` · ${latest.action}` : ''}${latest.signature ? ` · ${short(latest.signature)}` : ''} · ${latest.detail}`
+      : 'No automatic activity recorded.';
 }
 
 function selectedAutomationDraft() {
@@ -323,7 +345,35 @@ function renderAutomationCatalog(catalog) {
   refreshMiningDestinations(draft.destinationAddress, draft.travelMode);
 }
 
+function miningPillContent(state) {
+  if (state !== 'mining') return null;
+  const stop = automationRuntime?.assignment?.targetStopAtUnixSeconds;
+  const plan = lastCopperLoopPlan;
+  if (!stop) return { label: 'mining', title: '' };
+  const label = `Mining ${formatLocalHhmm(BigInt(stop))}`;
+  // Linear estimate holds only when cargo is the limiting event; otherwise keep
+  // the pill without a counter rather than show a wrong number.
+  if (!plan || plan.limitingEvent !== 'cargo') return { label, title: '' };
+  const current = estimateCurrentCopper({
+    nowUnixSeconds: BigInt(Math.floor(Date.now() / 1_000)),
+    targetStopAtUnixSeconds: BigInt(stop),
+    targetMiningSeconds: BigInt(plan.targetMiningSeconds),
+    expectedCopperRaw: BigInt(plan.expectedCopperRaw),
+  });
+  return { label, title: `Estimated ${plan.resource}: ${current}/${plan.expectedCopperRaw}` };
+}
+
+function applyMiningPills() {
+  for (const pill of document.querySelectorAll('.state-pill[data-mining-pill]')) {
+    const content = miningPillContent('mining');
+    if (!content) continue;
+    pill.textContent = content.label;
+    pill.title = content.title;
+  }
+}
+
 function renderCopperLoop(plan) {
+  lastCopperLoopPlan = plan;
   $('route-empty').hidden = true;
   $('route-preview').hidden = false;
   $('route-path').textContent = `${plan.homeSystem} → ${plan.asteroid} → ${plan.homeSystem}`;
@@ -497,5 +547,9 @@ setInterval(async () => {
     renderStatusPanel();
   } catch { /* Manual refresh or the next explicit action will surface IPC failures. */ }
 }, 5_000);
+
+// Realtime pill: local 1s linear estimate from the durable plan, zero RPC and
+// zero IPC churn. The 60s fleet snapshot remains the authoritative correction.
+setInterval(applyMiningPills, 1_000);
 
 boot().catch((error) => { $('rpc-status').textContent = `Startup failed: ${error.message || error}`; });
