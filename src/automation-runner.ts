@@ -1,6 +1,19 @@
 import type { AutomationAssignmentRecord, AepaDatabase } from './database.js';
 import { PLAN_STAGE_MARKER, PlannerStageError } from './c4.js';
 
+const FAST_FOLLOW_AFTER_CONFIRM_MS = 2_500;
+const MIN_REFRESH_INTERVAL_MS = 15_000;
+
+/** After a confirmed action the runner should chain the next step almost
+ * immediately (SLYA-style snappiness) instead of waiting for the full
+ * configured refresh interval. Waiting/idle/paused/busy keep the configured
+ * cadence with the same 15s floor the scheduler already enforces.
+ */
+export function nextAutomationTickDelayMs(kind: AutomaticTickResult['kind'], refreshIntervalSeconds: number): number {
+  const refresh = Math.max(Math.trunc(refreshIntervalSeconds || 0), 15) * 1_000;
+  return kind === 'confirmed' ? FAST_FOLLOW_AFTER_CONFIRM_MS : Math.max(refresh, MIN_REFRESH_INTERVAL_MS);
+}
+
 export type AutomaticStepOutcome = {
   kind: 'waiting';
   untilUnixSeconds: bigint;

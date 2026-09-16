@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMiningAutomationCatalog } from '../src/automation-catalog.js';
 import { assertAutomationCanEnable, assertAutomationCanReplace, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
-import { AutomaticCopperRunner } from '../src/automation-runner.js';
+import { AutomaticCopperRunner, nextAutomationTickDelayMs } from '../src/automation-runner.js';
 import { executeNextCopperStepOnce } from '../src/automatic-c4.js';
 import { getActiveC4ProfileAuthority, loadC4Fleets, simulateNextCopperStepSigned } from '../src/c4.js';
 import { AepaDatabase } from '../src/database.js';
@@ -36,9 +36,10 @@ function automationState() {
 function scheduleAutomationTick(delayMs = 0): void {
   if (automationTimer) clearTimeout(automationTimer);
   automationTimer = setTimeout(async () => {
-    await automationRunner.tick();
-    const intervalMs = Math.max(database.getSettings().refreshIntervalSeconds, 15) * 1_000;
-    scheduleAutomationTick(intervalMs);
+    const result = await automationRunner.tick();
+    // SLYA-style snappiness: as soon as one action confirms, chain the next
+    // step almost immediately instead of waiting the full refresh interval.
+    scheduleAutomationTick(nextAutomationTickDelayMs(result.kind, database.getSettings().refreshIntervalSeconds));
   }, delayMs);
 }
 

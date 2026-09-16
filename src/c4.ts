@@ -523,7 +523,7 @@ export async function executeAuthorizedServiceBundleOnce(
       } catch (error) {
         if (String((error as Error)?.message ?? error).startsWith('Submitted service bundle failed:')) throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (!confirmed) throw new Error(`Service bundle ${submission.signature} was submitted once but confirmation was not observed within 90 seconds; it must not be resubmitted`);
     const targetFoodRaw = cargoAmount(prepared.fleet, 1) + prepared.amounts.foodToFleetRaw;
@@ -547,7 +547,7 @@ export async function executeAuthorizedServiceBundleOnce(
         serviceObserved = true;
         break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (!serviceObserved) throw new Error(`Service bundle ${submission.signature} confirmed, but the exact docked serviced balances were not observed within 45 seconds`);
     return {
@@ -690,7 +690,7 @@ async function executeAuthorizedCopperStepOnce(
       } catch (error) {
         if (String((error as Error)?.message ?? error).startsWith(`Submitted ${expectedAction} transaction failed:`)) throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (!confirmed) throw new Error(`${expectedAction} transaction ${submission.signature} was submitted once but confirmation was not observed within 90 seconds; it must not be resubmitted`);
 
@@ -703,7 +703,7 @@ async function executeAuthorizedCopperStepOnce(
         const snapshot = await loadC4Fleets(settings);
         miningFleet = snapshot.fleets.find((fleet) => fleet.name === 'MF-01');
         if (miningFleet?.state === 'mining') break;
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
       if (miningFleet?.state !== 'mining') throw new Error(`start-mining transaction ${submission.signature} confirmed, but mining state was not observed within 45 seconds`);
       resultingFleetState = miningFleet.state;
@@ -711,7 +711,7 @@ async function executeAuthorizedCopperStepOnce(
     } else {
       let resulting = await prepareNextCopperStep(sage, settings);
       while (resulting.decision.kind === expectedAction && Date.now() < stateDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
         resulting = await prepareNextCopperStep(sage, settings);
       }
       if (resulting.decision.kind === expectedAction) throw new Error(`${expectedAction} transaction ${submission.signature} confirmed, but the resulting fleet state was not observed within 45 seconds`);
