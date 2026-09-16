@@ -13,11 +13,16 @@ import { isPostSubmissionFailure } from '../src/automatic-c4.js';
 import { C4_NETWORK } from '../src/network.js';
 import { authorizeSignerStatus, getSignerStatus, removeStoredSigner, storeAuthorizedSigner, withStoredSigner, type SignerStatus } from '../src/signer-store.js';
 
-// CPU rendering: first-interaction shader compilation on the integrated Intel
-// UHD GPU stalls the compositor for seconds ("Keine Rückmeldung" + ghost
-// window). AEPA is a dashboard; software compositing is visually equivalent
-// and removes the stall entirely. Must run before app is ready.
+// Proven Electron-on-Windows configuration used by GM/LM Market Bots: software
+// rendering plus no renderer backgrounding. AEPA's Intel UHD iGPU stalls on
+// first interaction (lazy shader compile + occluded-window throttling), which
+// shows up as multi-second "Keine Rückmeldung" freezes — these switches match
+// the stack that already works for the other bots. Must run before app ready.
 app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let database: AepaDatabase;
