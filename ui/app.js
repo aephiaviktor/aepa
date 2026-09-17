@@ -93,6 +93,14 @@ function snapshotAge(value) {
 
 let lastFleetSnapshot;
 
+function friendlySyncError(raw) {
+  const message = String(raw || '');
+  if (/character account was not found/.test(message)) {
+    return 'The character account was not found (z.ink game state unavailable). Will retry automatically.';
+  }
+  return `Reconnecting… last error: ${message.slice(0, 120)}. Will retry automatically.`;
+}
+
 function renderFleetSnapshot(snapshot) {
   lastFleetSnapshot = snapshot;
   const key = JSON.stringify([snapshot.sync, snapshot.fleets.map((fleet) => [fleet.address, fleet.updatedAt])]);
@@ -110,8 +118,8 @@ function renderFleetSnapshot(snapshot) {
     $('rpc-status').textContent = 'Reading C4 accounts…';
     $('fleet-sync-status').textContent = snapshot.fleets.length ? `Cached snapshot · ${age} · refreshing…` : 'Loading from C4…';
   } else if (sync.status === 'error') {
-    $('rpc-status').textContent = 'Refresh failed; using last-good SQLite data';
-    $('fleet-sync-status').textContent = `Cached snapshot · ${age} · refresh failed`;
+    $('rpc-status').textContent = 'Reconnecting… using last-good SQLite data';
+    $('fleet-sync-status').textContent = `Cached snapshot · ${age} · retrying automatically`;
     $('fleet-sync-status').title = sync.lastError || '';
   } else {
     $('rpc-status').textContent = 'Connecting automatically…';
@@ -122,18 +130,22 @@ function renderFleetSnapshot(snapshot) {
     $('character').title = payload.characterAddress;
   }
   if (payload?.copperLoop) lastCopperLoopPlan = payload.copperLoop;
-  if (sync.status === 'ready' && !automationCatalog) void ensureAutomationCatalog().catch(() => undefined);
+  // Always try to load the automation catalog when missing: the catalog layer
+  // serves the cached SQLite snapshot when the live z.ink read is unavailable,
+  // so the Automation page stays populated during outages instead of a dead
+  // "Connect to load…" message.
+  if (!automationCatalog) void ensureAutomationCatalog().catch(() => undefined);
 }
 
 async function ensureAutomationCatalog(force = false) {
   if (automationCatalogLoad) return automationCatalogLoad;
   if (automationCatalog && !force) return automationCatalog;
-  $('automation-empty').textContent = 'Loading faction systems and asteroid belts…';
+  $('automation-empty').textContent = "Reconnecting… loading from cache or C4…";
   automationCatalogLoad = window.aepa.loadAutomationCatalog().then((catalog) => {
     renderAutomationCatalog(catalog);
     return catalog;
   }).catch((error) => {
-    $('automation-empty').textContent = `Automation catalog blocked — ${error.message || String(error)}`;
+    $('automation-empty').textContent = friendlySyncError(error?.message || error);
     throw error;
   }).finally(() => { automationCatalogLoad = undefined; });
   return automationCatalogLoad;

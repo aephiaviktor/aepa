@@ -1,6 +1,6 @@
 {
   "name": "aepa",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Aephia C4 automation desktop app.",
   "private": true,
   "type": "module",
