@@ -214,6 +214,12 @@ app.whenReady().then(() => {
     safeStorage,
     async (secretKey) => simulateNextCopperStepSigned(database.getSettings(), secretKey),
   ));
+  ipcMain.handle('game:clear-cache', () => {
+    database.clearGameCache();
+    database.recordAutomationActivity({ kind: 'disabled', detail: 'Cached game data cleared after a C4 reset (fresh start); settings and encrypted signer kept' });
+    scheduleAutomationTick(0);
+    return automationState();
+  });
   createWindow();
   fleetSync.start();
   catalogSync.start();

@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('aepa', Object.freeze({
   setAutomationEnabled: (enabled) => ipcRenderer.invoke('automation:set-enabled', enabled),
   clearAutomationPause: () => ipcRenderer.invoke('automation:clear-pause'),
   simulateNextCopperStep: () => ipcRenderer.invoke('automation:simulate-next'),
+  clearGameCache: () => ipcRenderer.invoke('game:clear-cache'),
 }));

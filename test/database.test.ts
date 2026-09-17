@@ -3,6 +3,30 @@ import test from 'node:test';
 import { AepaDatabase } from '../src/database.js';
 import { DEFAULT_SETTINGS } from '../src/settings.js';
 
+test('clearGameCache wipes chain-derived data but keeps local settings', () => {
+  const database = new AepaDatabase(':memory:');
+  const profile = '11111111111111111111111111111111';
+  database.saveSettings({ ...DEFAULT_SETTINGS, playerProfile: profile });
+  const fleet = { address: 'fleet-1', profile, name: 'MF-01', state: 'mining', shipCount: 1, snapshot: { exact: 'data' }, updatedAt: '2026-09-17T10:00:00.000Z' };
+  database.replaceFleets(profile, [fleet]);
+  database.beginFleetSync(profile, '2026-09-17T10:00:00.000Z');
+  database.completeFleetSync(profile, [fleet], { startedAt: '2026-09-17T10:00:00.000Z', succeededAt: '2026-09-17T10:00:01.000Z', chainSlot: '100' });
+  database.saveAutomationAssignment({ profile, fleetAddress: 'fleet-1', fleetName: 'MF-01', assignment: 'mining', homeSystemAddress: 'eternity', homeSystemId: 10, homeSystemName: 'Eternity', resourceId: 311, resourceName: 'Copper Ore', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto' });
+  database.recordAutomationActivity({ kind: 'confirmed', action: 'start-mining', signature: 'sig-1', detail: 'seeded' });
+  assert.equal(database.getFleetSnapshot(profile).fleets.length, 1);
+  assert.equal(database.getAutomationAssignment()?.fleetName, 'MF-01');
+  assert.ok(database.listAutomationActivity().length > 0);
+
+  database.clearGameCache();
+
+  assert.equal(database.getFleetSnapshot(profile).fleets.length, 0);
+  assert.equal(database.getFleetSnapshot(profile).sync.status, 'never');
+  assert.equal(database.getAutomationAssignment(), undefined);
+  assert.equal(database.listAutomationActivity().length, 0);
+  assert.equal(database.getSettings().playerProfile, profile);
+  database.close();
+});
+
 test('SQLite persists settings and atomically replaces one profile fleet snapshot', () => {
   const database = new AepaDatabase(':memory:');
   const profile = '11111111111111111111111111111111';

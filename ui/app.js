@@ -520,6 +520,29 @@ $('settings-form').onsubmit = async (event) => {
     setTimeout(() => showSettings(false), 350);
   } catch (error) { $('save-state').textContent = error.message || String(error); }
 };
+$('clear-game-cache').onclick = async () => {
+  if (!window.confirm('Clear all cached game data (fleets, catalog, saved assignment, activity)? Settings and the encrypted signer are kept. A DB backup is saved first in AEPA-rollbacks.')) return;
+  const button = $('clear-game-cache');
+  button.disabled = true;
+  $('save-state').textContent = 'Backing up and clearing cached game data…';
+  try {
+    await window.aepa.clearGameCache();
+    automationCatalog = undefined;
+    automationRuntime = undefined;
+    lastCopperLoopPlan = undefined;
+    lastFleetSnapshot = undefined;
+    lastFleetSnapshotKey = undefined;
+    renderStatusPanel();
+    renderFleetSnapshot(await window.aepa.getFleetSnapshot());
+    renderAutomationState(await window.aepa.getAutomationState());
+    $('save-state').textContent = 'Cached game data cleared — fresh start; AEPA re-syncs on its own.';
+    setTimeout(() => showSettings(false), 1_200);
+  } catch (error) {
+    $('save-state').textContent = `Clear failed — ${error.message || String(error)}`;
+  } finally {
+    button.disabled = false;
+  }
+};
 
 setInterval(async () => {
   try {

@@ -448,6 +448,20 @@ export class AepaDatabase {
     `).all(safeLimit) as unknown as AutomationActivityRecord[];
   }
 
+  /** Fresh-start after a C4 reset: removes every chain-derived row (cached
+   * fleet snapshots, sync metadata, the saved Automation assignment, and the
+   * activity log) while keeping local app settings untouched. The encrypted
+   * signer file is out of SQLite and stays as-is.
+   */
+  clearGameCache(): void {
+    this.db.exec(`
+      DELETE FROM fleet_snapshots;
+      DELETE FROM sync_state;
+      DELETE FROM automation_assignment;
+      DELETE FROM automation_activity;
+    `);
+  }
+
   close(): void {
     this.db.close();
   }

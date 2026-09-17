@@ -30,6 +30,11 @@ test('desktop shell exposes automatic cached fleet refresh and safe read-only st
   assert.match(html, /type="password"[^>]+id="c4-signer-secret"/);
   assert.match(html, /id="store-signer"/);
   assert.match(html, /id="remove-signer"/);
+  assert.match(html, /id="clear-game-cache"/);
+  assert.match(html, /Clear cached game data \(fresh start\)/);
+  assert.match(preload, /clearGameCache/);
+  assert.match(main, /game:clear-cache/);
+  assert.match(script, /clearGameCache\(\)/);
   assert.match(script, /saveSigner/);
   assert.match(script, /removeSigner/);
   assert.doesNotMatch(html, /Influx/i);
