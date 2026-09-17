@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMiningAutomationCatalog } from '../src/automation-catalog.js';
 import { assertAutomationCanEnable, assertAutomationCanReplace, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
-import { AutomaticCopperRunner, nextAutomationTickDelayMs } from '../src/automation-runner.js';
+import { AutomaticCopperRunner, nextAutomationTickDelayMs, shouldAutoRetryPaused } from '../src/automation-runner.js';
 import { executeNextCopperStepOnce } from '../src/automatic-c4.js';
 import { getActiveC4ProfileAuthority, loadC4Fleets, simulateNextCopperStepSigned } from '../src/c4.js';
 import { AepaDatabase } from '../src/database.js';
@@ -44,9 +44,22 @@ function automationState() {
   };
 }
 
+// Plan-stage (spurious) pauses retry on their own: the operator no longer has
+// to clear them. Post-submission pauses always stay paused for out-of-band
+// chain-state reconciliation, never auto-retried.
+let lastAutoReconnectAt = 0;
+const AUTO_RECONNECT_INTERVAL_MS = 60_000;
+
 function scheduleAutomationTick(delayMs = 0): void {
   if (automationTimer) clearTimeout(automationTimer);
   automationTimer = setTimeout(async () => {
+    const assignment = database.getAutomationAssignment();
+    const now = Date.now();
+    if (assignment && shouldAutoRetryPaused(assignment) && now - lastAutoReconnectAt >= AUTO_RECONNECT_INTERVAL_MS) {
+      lastAutoReconnectAt = now;
+      database.setAutomationEnabled(true);
+      database.recordAutomationActivity({ kind: 'enabled', detail: 'Automatic reconnect after a plan-stage pause (nothing was submitted)' });
+    }
     const result = await automationRunner.tick();
     // SLYA-style snappiness: as soon as one action confirms, chain the next
     // step almost immediately instead of waiting the full refresh interval.

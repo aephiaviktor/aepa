@@ -1,8 +1,18 @@
 import type { AutomationAssignmentRecord, AepaDatabase } from './database.js';
 import { PLAN_STAGE_MARKER, PlannerStageError } from './c4.js';
+import { isPostSubmissionFailure } from './automatic-c4.js';
 
 const FAST_FOLLOW_AFTER_CONFIRM_MS = 2_500;
 const MIN_REFRESH_INTERVAL_MS = 15_000;
+
+/** True when a paused assignment can be retried automatically: the pause is
+ * plan-stage (nothing was submitted) and never a post-submission failure,
+ * which must stay paused until chain state is reconciled out of band.
+ */
+export function shouldAutoRetryPaused(assignment: AutomationAssignmentRecord | undefined): boolean {
+  if (!assignment || assignment.status !== 'paused') return false;
+  return !isPostSubmissionFailure(assignment.lastError ?? '');
+}
 
 /** After a confirmed action the runner should chain the next step almost
  * immediately (SLYA-style snappiness) instead of waiting for the full

@@ -121,7 +121,7 @@ function renderFleetSnapshot(snapshot) {
     $('character').textContent = `Character ${short(payload.characterAddress)}`;
     $('character').title = payload.characterAddress;
   }
-  if (payload?.copperLoop) renderCopperLoop(payload.copperLoop);
+  if (payload?.copperLoop) lastCopperLoopPlan = payload.copperLoop;
   if (sync.status === 'ready' && !automationCatalog) void ensureAutomationCatalog().catch(() => undefined);
 }
 
@@ -183,17 +183,8 @@ function renderStatusPanel() {
       pill.dataset.miningPill = 'true';
       bindMiningPill(pill);
     }
-    const info = document.createElement('span');
-    info.className = 'status-info';
-    const latest = automationRuntime?.activity?.[0];
-    const age = snapshotAge(lastFleetSnapshot?.sync?.lastSucceededAt || fleet.updatedAt);
-    // While mining, the "Mining remains active until …" waiting line is
-    // redundant: the pill already shows the target stop time locally.
-    const waitingLineHidden = mining !== null && latest?.kind === 'waiting' && /Mining remains active until/.test(latest.detail ?? '');
-    info.textContent = waitingLineHidden
-      ? `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`
-      : latest ? `${latest.kind.toUpperCase()} · ${latest.detail}` : `${fleet.state} · updated ${age} · ${new Date(fleet.updatedAt).toLocaleTimeString()}`;
-    row.append(name, pill, info);
+    // Status bar is fleet data only: name + state pill, no activity/error text.
+    row.append(name, pill);
     host.append(row);
   }
 }
@@ -247,13 +238,6 @@ function renderSignerStatus(status) {
   if (automationRuntime) renderAutomationState(automationRuntime);
 }
 
-function formatDuration(seconds) {
-  const value = Number(seconds);
-  const hours = Math.floor(value / 3600);
-  const minutes = Math.floor((value % 3600) / 60);
-  return `${hours}h ${minutes}m`;
-}
-
 function replaceSelectOptions(select, options, preferredValue) {
   select.replaceChildren();
   for (const option of options) {
@@ -274,12 +258,7 @@ function renderAutomationState(state) {
   automationRuntime = state;
   const assignment = state?.assignment;
   const running = assignment?.enabled && assignment.status === 'running';
-  $('automatic-status').textContent = assignment ? (running ? 'Running — LIVE sends enabled' : assignment.status) : 'Disabled — no saved assignment';
-  $('automatic-detail').textContent = assignment?.lastError
-    || (assignment ? `${assignment.fleetName} / ${assignment.homeSystemName} / ${assignment.destinationName} / ${assignment.resourceName}` : 'Save the proven MF-01 / Eternity / Ioki / Copper assignment before enabling.');
   const reconciliationRequired = assignment?.status === 'paused';
-  $('clear-pause').hidden = state?.clearablePause !== true;
-  $('pause-automation').disabled = !running;
   $('save-assignment').disabled = running || reconciliationRequired || !$('automation-destination').value;
   $('automation-mode').textContent = running ? 'LIVE — running' : assignment?.status === 'paused' ? 'Paused' : 'Disabled';
   const latest = state?.activity?.[0];
@@ -434,55 +413,6 @@ function applyMiningPills() {
   }
 }
 
-function renderCopperLoop(plan) {
-  lastCopperLoopPlan = plan;
-  $('route-empty').hidden = true;
-  $('route-preview').hidden = false;
-  $('route-path').textContent = `${plan.homeSystem} → ${plan.asteroid} → ${plan.homeSystem}`;
-  $('route-note').textContent = plan.sameSystem ? 'Ioki is inside the Eternity system; no inter-system travel is required.' : 'Movement required.';
-  $('food-cargo').textContent = `${plan.foodForCargoRaw} Food`;
-  $('food-ammo').textContent = `${plan.foodForAmmoRaw} Food`;
-  $('food-load').textContent = `${plan.foodToLoadRaw} Food`;
-  $('limit-reason').textContent = plan.limitingEvent === 'simultaneous' ? 'Cargo and Ammo finish together' : `${plan.limitingEvent === 'cargo' ? 'Cargo capacity' : 'Ammo bank'} happens first`;
-  $('expected-copper').textContent = `${plan.expectedCopperRaw} Copper Ore`;
-  $('mining-duration').textContent = formatDuration(plan.targetMiningSeconds);
-  $('bank-targets').textContent = `${plan.ammoBankTargetRaw} Ammo / ${plan.fuelTankTargetRaw} Fuel`;
-  $('rounding-note').textContent = plan.unavoidableFoodRoundingRaw === '0'
-    ? 'Food reaches exactly zero at the limiting event. No reserve is added.'
-    : `No reserve is added. Exact integer execution leaves ${plan.unavoidableFoodRoundingRaw} unavoidable raw Food unit of rounding.`;
-}
-
-async function simulateNextStep() {
-  const button = $('simulate-next');
-  button.disabled = true;
-  button.textContent = 'Signing & simulating…';
-  $('simulation-result').textContent = 'Building from fresh C4 state, signing locally, and verifying the signature in simulation…';
-  try {
-    const result = await window.aepa.simulateNextCopperStep();
-    $('simulation-result').textContent = `PASS — signature verified; ${result.summary} (${result.unitsConsumed} compute units; nothing submitted)`;
-    $('simulation-logs').hidden = false;
-    $('simulation-logs').textContent = [
-      'SIGNED SIMULATION — NOTHING SUBMITTED',
-      `Action: ${result.nextStep}`,
-      `Authority: ${result.authority} (profile key index ${result.keyIndex})`,
-      `Transaction signature: ${result.transactionSignature}`,
-      `Simulation slot: ${result.simulationSlot}`,
-      `Compute units: ${result.unitsConsumed}`,
-      '',
-      'Exact plan:',
-      JSON.stringify(result.plan, null, 2),
-      '',
-      'Program logs:',
-      ...result.logs,
-    ].join('\n');
-  } catch (error) {
-    $('simulation-result').textContent = `BLOCKED — ${error.message || String(error)}`;
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Run signed simulation';
-  }
-}
-
 async function boot() {
   const [bootstrap, loadedSettings, fleetSnapshot, automation] = await Promise.all([window.aepa.bootstrap(), window.aepa.getSettings(), window.aepa.getFleetSnapshot(), window.aepa.getAutomationState()]);
   settings = loadedSettings;
@@ -504,7 +434,6 @@ $('show-status').onclick = () => setStatusOpen($('status-panel').hidden);
 $('close-status').onclick = () => setStatusOpen(false);
 $('show-fleets').onclick = () => setActivePage('fleets');
 $('show-automation').onclick = () => setActivePage('automation');
-$('simulate-next').onclick = simulateNextStep;
 for (const id of ['automation-fleet', 'automation-home', 'automation-resource', 'automation-destination', 'automation-travel']) {
   $(id).addEventListener('change', () => refreshMiningDestinations($('automation-destination').value, $('automation-travel').value));
 }
@@ -527,17 +456,6 @@ $('save-assignment').onclick = async () => {
   }
 };
 $('cancel-assignment').onclick = restoreSavedAssignment;
-$('clear-pause').onclick = async () => {
-  if (!window.confirm('Clear this spurious pause? It happened while planning a refill, so nothing was submitted. The assignment will return to disabled so you can Save (which re-enables it).')) return;
-  $('automatic-detail').textContent = 'Clearing the spurious pause…';
-  try { renderAutomationState(await window.aepa.clearAutomationPause()); }
-  catch (error) { $('automatic-detail').textContent = `BLOCKED — ${error.message || String(error)}`; }
-};
-$('pause-automation').onclick = async () => {
-  if (!window.confirm('Pause Automation? A transaction already submitted to C4 cannot be cancelled, but no following transaction will start.')) return;
-  try { renderAutomationState(await window.aepa.setAutomationEnabled(false)); }
-  catch (error) { $('automatic-detail').textContent = `BLOCKED — ${error.message || String(error)}`; }
-};
 $('close-settings').onclick = () => showSettings(false);
 $('settings-overlay').onclick = (event) => { if (event.target === $('settings-overlay')) showSettings(false); };
 $('store-signer').onclick = async () => {
@@ -590,16 +508,6 @@ $('settings-form').onsubmit = async (event) => {
     setTimeout(() => showSettings(false), 350);
   } catch (error) { $('save-state').textContent = error.message || String(error); }
 };
-$('connect').onclick = async () => {
-  const button = $('connect');
-  button.disabled = true; button.textContent = 'Refreshing…'; $('rpc-status').textContent = 'Reading C4 accounts…';
-  try {
-    await window.aepa.connect();
-    renderFleetSnapshot(await window.aepa.getFleetSnapshot());
-    await ensureAutomationCatalog(true);
-  } catch (error) { $('rpc-status').textContent = error.message || String(error); }
-  finally { button.disabled = false; button.textContent = 'Refresh now'; }
-};
 
 setInterval(async () => {
   try {
@@ -607,7 +515,7 @@ setInterval(async () => {
     renderFleetSnapshot(fleetSnapshot);
     renderAutomationState(automation);
     renderStatusPanel();
-  } catch { /* Manual refresh or the next explicit action will surface IPC failures. */ }
+  } catch { /* The next explicit action or poll will surface IPC failures. */ }
 }, 5_000);
 
 // Realtime pill: local 1s linear estimate from the durable plan, zero RPC and

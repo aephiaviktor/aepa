@@ -8,8 +8,9 @@ the operational direction follows SLYA, rebuilt against the C4 account model.
 - Locked to the C4 z.ink PTR/testnet deployment.
 - Stores settings, last-good fleet snapshots and sync metadata, one Automation
   assignment, runtime checkpoints, and activity locally in SQLite.
-- Renders the cached fleet snapshot immediately, refreshes it from C4 at startup
-  and at the configured interval, and keeps a manual **Refresh now** fallback.
+- Renders the cached fleet snapshot immediately and refreshes it from C4 at the
+  configured interval; AEPA always reconnects on its own, so there is no manual
+  "Refresh now" button.
 - Discovers live faction territories, systems, asteroid belts, and resources.
 - Stores the C4 authority signer with Electron/Windows OS encryption; the key is
   never stored in SQLite and is revalidated against the active Profile authority.
@@ -29,18 +30,17 @@ separate enable step. The runner executes at most one action per tick and AEPA:
 5. records the checkpoint and activity durably before advancing.
 
 Only one runner tick may execute at a time. Any error pauses the assignment. A
-runner-paused assignment cannot be re-enabled or replaced in the app until its
-chain state has been reconciled out of band. Confirmed mining start deadlines
-are durable, and enabled assignments resume when AEPA restarts. Pausing prevents
-the next send but cannot cancel a transaction already submitted to C4. The
-Mining Configuration header offers exactly one Save and one Cancel; Cancel
-restores the previously saved assignments.
+plan-stage pause (nothing was submitted) is retried automatically on the normal
+refresh cadence; a pause that followed a submitted transaction stays paused
+until its chain state has been reconciled out of band. Confirmed mining start
+deadlines are durable, and enabled assignments resume when AEPA restarts.
+Pausing prevents the next send but cannot cancel a transaction already
+submitted to C4. The Fleet Assignment header offers exactly one Save and one
+Cancel; Cancel restores the previously saved assignments.
 
 A right-side **Status** bar (opened above Settings) lists every fleet and its
-current state/info in real time, updated from the cached snapshot and automation
-activity without extra writes. The manual **Run signed simulation** button is a
-dedicated preview: it still simulates with signature verification and submits
-nothing; the automatic path never simulates before sending.
+current state in real time, updated from the cached snapshot without extra
+writes. The automatic path never simulates before sending.
 
 Other resources, destinations, fleets, and inter-system travel may be explored
 in the configuration UI, but the trusted main process rejects them for automatic

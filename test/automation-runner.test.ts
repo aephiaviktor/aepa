@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AutomaticCopperRunner, nextAutomationTickDelayMs } from '../src/automation-runner.js';
-import { AepaDatabase } from '../src/database.js';
+import { AutomaticCopperRunner, nextAutomationTickDelayMs, shouldAutoRetryPaused } from '../src/automation-runner.js';
+import { AepaDatabase, type AutomationAssignmentRecord } from '../src/database.js';
 
 function enabledDatabase(): AepaDatabase {
   const database = new AepaDatabase(':memory:');
@@ -78,4 +78,17 @@ test('persists a wait deadline without sending a transaction', async () => {
   assert.deepEqual(await runner.tick(), { kind: 'waiting', untilUnixSeconds: 2_000n });
   assert.equal(database.listAutomationActivity()[0].kind, 'waiting');
   database.close();
+});
+
+test('auto-retries plan-stage pauses but never post-submission failures', () => {
+  const base: AutomationAssignmentRecord = {
+    profile: 'profile-1', fleetAddress: 'fleet-mf01', fleetName: 'MF-01', assignment: 'mining',
+    homeSystemAddress: 'eternity', homeSystemId: 10, homeSystemName: 'Eternity', resourceId: 311,
+    resourceName: 'Copper Ore', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto',
+    enabled: false, status: 'paused', lastError: 'PLAN_STAGE Planning failed before any send', updatedAt: '2026-09-16T00:00:00Z',
+  };
+  assert.equal(shouldAutoRetryPaused(base), true);
+  assert.equal(shouldAutoRetryPaused({ ...base, status: 'running' }), false);
+  assert.equal(shouldAutoRetryPaused({ ...base, lastError: 'submitted once but confirmation was not observed' }), false);
+  assert.equal(shouldAutoRetryPaused(undefined), false);
 });

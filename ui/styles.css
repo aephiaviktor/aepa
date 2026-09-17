@@ -30,7 +30,6 @@ button:disabled { cursor: default; }
 .status-fleet { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; padding: 10px 9px; border: 1px solid var(--line-soft); border-radius: 8px; background: #041523; }
 .status-fleet strong { color: #fff; font-size: 12px; }
 .status-fleet .state-pill { justify-self: end; }
-.status-info { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 24px 15px 18px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #011f29 0, #01080c 100%); display: flex; flex-direction: column; box-shadow: 8px 0 36px #0006; }
 .brand { display: flex; gap: 11px; align-items: center; padding: 0 9px 27px; }
 .brand-mark { width: 40px; height: 40px; border-radius: 9px; object-fit: cover; box-shadow: 0 0 26px #45d6c155; }
@@ -104,10 +103,7 @@ input:disabled, select:disabled { opacity: .58; }
 .config-header { align-items: center; }
 .config-actions { display: flex; gap: 7px; }
 .config-actions button { font-size: 11px; padding: 9px 15px; }
-.automation-fleet-row { display: grid; grid-template-columns: 98px minmax(0, 1fr); gap: 10px; align-items: end; padding: 9px 10px; border-left: 3px solid var(--cyan); background: linear-gradient(90deg, #082c49, #061b2e); }
-.fleet-row-heading { align-self: center; display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 7px; }
-.fleet-row-heading span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: #07577b; color: var(--cyan-soft); font-size: 9px; font-weight: 900; }
-.fleet-row-heading strong { font-size: 10px; line-height: 1.2; }
+.automation-fleet-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: end; padding: 9px 10px; border-left: 3px solid var(--cyan); background: linear-gradient(90deg, #082c49, #061b2e); }
 .field-grid { display: grid; }
 .compact-field-grid { grid-template-columns: 1.05fr .72fr .95fr .76fr minmax(220px, 1.65fr) .72fr; gap: 7px; align-items: end; }
 .compact-field-grid label { display: grid; gap: 3px; min-width: 0; color: #7fb1ca; font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -118,37 +114,10 @@ input:disabled, select:disabled { opacity: .58; }
 .configuration-summary > div { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
 .configuration-summary strong { color: #dcf7ff; font-size: 10px; white-space: nowrap; }
 .configuration-summary span { overflow: hidden; color: #6f9eb9; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.live-automation { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 8px; padding: 9px 10px; border: 1px solid #744554; border-radius: 7px; background: linear-gradient(90deg, #22131d, #14131e); }
-.live-automation > div:first-child { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 8px; min-width: 0; }
-.live-automation .eyebrow { margin: 0; }
-.live-automation strong { color: #ffdbe7; font-size: 11px; white-space: nowrap; }
-.live-automation span { overflow: hidden; color: #aa8997; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.automation-actions { display: flex; gap: 7px; flex-shrink: 0; }
-.automation-actions button { font-size: 10px; }
 .automation-activity { margin: 0 8px 8px; padding: 7px 9px; border-radius: 6px; background: #03101c; color: #6e9bb6; font-size: 9px; line-height: 1.35; }
 .danger { border: 1px solid #8c4b5c; border-radius: 7px; padding: 8px 11px; background: #3b1c27; color: #ffb5c4; font-size: 11px; font-weight: 800; white-space: nowrap; }
 .danger:hover:not(:disabled) { background: #542536; }
 .danger:disabled { opacity: .4; }
-.subsection-title { display: flex; justify-content: space-between; align-items: end; margin: 14px 0 9px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
-.subsection-title h3 { margin: 0; font-size: 15px; }
-.route-empty { padding: 22px !important; }
-.route-line { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 10px 12px; border-bottom: 1px solid var(--line-soft); }
-.route-line strong { color: #e9fbff; font-size: 12px; }
-.route-line span { color: #72a4bf; font-size: 10px; text-align: right; }
-.metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line-soft); }
-.metric-grid article { min-height: 65px; padding: 11px 12px; background: #071d30; }
-.metric-grid span { display: block; color: #6e9db9; font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }
-.metric-grid strong { display: block; margin-top: 6px; color: #ddf7ff; font-size: 14px; }
-.metric-grid small { display: block; margin-top: 3px; color: #6b99b4; font-size: 8px; }
-.metric-grid .selected-metric { background: linear-gradient(135deg, #075073, #083151); }
-.metric-grid .selected-metric strong { color: var(--cyan); }
-.automation-panel .notice { margin: 9px 12px; }
-.simulation-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin: 9px 12px 1px; padding-top: 9px; border-top: 1px solid var(--line-soft); }
-.simulation-row > div { display: grid; gap: 3px; }
-.simulation-row strong { color: #dcf7ff; font-size: 10px; }
-.simulation-row span { color: #70a0ba; font-size: 9px; }
-.simulation-row button { font-size: 11px; }
-#simulation-logs { max-height: 160px; margin: 10px 12px 3px; padding: 11px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 7px; background: #020d17; color: #74abc7; font-size: 9px; white-space: pre-wrap; }
 .overlay { position: fixed; inset: 0; z-index: 10; background: #010712b8; backdrop-filter: blur(4px); }
 .drawer { margin-left: auto; width: min(470px, 100%); height: 100%; padding: 27px; overflow: auto; border-left: 1px solid #1685b6; background: #06192b; }
 .drawer-head { display: flex; justify-content: space-between; align-items: start; margin-bottom: 26px; }
@@ -165,7 +134,6 @@ input:disabled, select:disabled { opacity: .58; }
 @media (max-width: 1250px) {
   .compact-field-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .destination-field { grid-column: span 2; }
-  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1100px) {
   main { padding: 23px 20px; }

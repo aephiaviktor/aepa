@@ -33,7 +33,7 @@
       </div>
     </aside>
     <main>
-      <header><div><p class="eyebrow">USTUR INSTANCE</p><h2 id="page-title">Fleet Control</h2></div><button id="connect" class="primary">Refresh now</button></header>
+      <header><div><p class="eyebrow">USTUR INSTANCE</p><h2 id="page-title">Fleet Control</h2></div></header>
       <section id="fleets-page" class="page-view">
       <section class="status-grid">
         <article><span>Network</span><strong id="network">C4 Testnet</strong><small id="rpc-status">Not connected</small></article>
@@ -48,11 +48,10 @@
       </section>
       <section id="automation-page" class="page-view" hidden>
       <section id="automation-panel" class="panel automation-panel">
-        <div class="panel-title config-header"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Mining Configuration</h3></div><div class="config-actions"><button id="cancel-assignment" class="secondary" type="button">Cancel</button><button id="save-assignment" class="primary" type="button">Save</button></div></div>
+        <div class="panel-title config-header"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Fleet Assignment</h3></div><div class="config-actions"><button id="cancel-assignment" class="secondary" type="button">Cancel</button><button id="save-assignment" class="primary" type="button">Save</button></div></div>
         <div id="automation-empty" class="empty route-empty">Connect to load live fleets, faction systems, asteroid belts, and resources.</div>
         <form id="automation-config" class="automation-config" hidden>
           <div class="automation-fleet-row">
-            <div class="fleet-row-heading"><span>01</span><strong>Fleet assignment</strong></div>
             <div class="field-grid compact-field-grid">
               <label>Fleet<select id="automation-fleet"></select></label>
               <label>Assignment<select id="automation-assignment"><option value="mining">Mining</option></select></label>
@@ -63,31 +62,8 @@
             </div>
           </div>
           <div class="configuration-summary"><div><strong id="configuration-route">Select a complete assignment</strong><span id="configuration-detail">Save persists the assignment and enables live execution of the proven MF-01 / Eternity / Ioki / Copper loop immediately.</span></div></div>
-          <div class="live-automation">
-            <div><p class="eyebrow">AUTOMATIC SEND PATH</p><strong id="automatic-status">Disabled</strong><span id="automatic-detail">Saving a fleet assignment enables it automatically. Pause stops the runner safely.</span></div>
-            <div class="automation-actions"><button id="clear-pause" class="secondary" type="button" hidden>Clear spurious pause</button><button id="pause-automation" class="secondary" type="button" disabled>Pause automation</button></div>
-          </div>
           <div id="automation-activity" class="automation-activity">No automatic activity recorded.</div>
         </form>
-        <div class="subsection-title"><div><p class="eyebrow">ZERO-RESERVE PLAN</p><h3>Copper Mining Loop</h3></div><span class="preview-pill">Preview only</span></div>
-        <div id="route-empty" class="empty route-empty">Connect to calculate the next mining cycle from live C4 state.</div>
-        <div id="route-preview" hidden>
-          <div class="route-line"><strong id="route-path">Eternity → Ioki → Eternity</strong><span id="route-note"></span></div>
-          <div class="metric-grid">
-            <article><span>Food until cargo full</span><strong id="food-cargo">—</strong></article>
-            <article><span>Food until ammo empty</span><strong id="food-ammo">—</strong></article>
-            <article class="selected-metric"><span>Food to load</span><strong id="food-load">—</strong><small id="limit-reason">—</small></article>
-            <article><span>Expected Copper</span><strong id="expected-copper">—</strong></article>
-            <article><span>Mining duration</span><strong id="mining-duration">—</strong></article>
-            <article><span>Dedicated banks</span><strong id="bank-targets">—</strong><small>Ammo bank / Fuel tank</small></article>
-          </div>
-          <p id="rounding-note" class="notice"></p>
-          <div class="simulation-row">
-            <div><strong>Next signed transaction</strong><span id="simulation-result">Not simulated yet; nothing will be submitted</span></div>
-            <button id="simulate-next" class="secondary" type="button">Run signed simulation</button>
-          </div>
-          <pre id="simulation-logs" hidden></pre>
-        </div>
       </section>
       </section>
     </main>

@@ -7,7 +7,7 @@ test('desktop shell exposes automatic cached fleet refresh and safe read-only st
   const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
   assert.match(html, /C4 TESTNET/);
   assert.match(html, /Player Profile/);
-  assert.match(html, /Refresh now/);
+  assert.doesNotMatch(html, /Refresh now/);
   assert.match(html, /id="fleet-sync-status"/);
   assert.match(html, /No signer configured; no RPC writes/);
   assert.match(html, /id="signer-status"/);
@@ -22,6 +22,7 @@ test('desktop shell exposes automatic cached fleet refresh and safe read-only st
   assert.match(main, /new CatalogSyncCoordinator/);
   assert.match(main, /catalogSync\.start\(\)/);
   assert.match(main, /catalogSync\.resolve\(\)/);
+  assert.match(main, /shouldAutoRetryPaused/);
   assert.match(script, /authorizedForProfile/);
   assert.match(script, /C4 authority verified/);
   assert.match(html, /C4 signer private key/);
@@ -66,6 +67,8 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   }
   assert.match(html, /Region \| System \| Asteroid belt \| Distance/);
   assert.match(html, /config-header/);
+  assert.match(html, /Fleet Assignment/);
+  assert.doesNotMatch(html, /Mining Configuration/);
   assert.match(html, /id="save-assignment"/);
   assert.match(script, /rankMiningDestinations/);
   assert.match(script, /loadAutomationCatalog/);
@@ -75,15 +78,10 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   assert.match(html, /id="show-status"/);
   assert.match(html, /id="status-panel"/);
   assert.match(html, /id="cancel-assignment"/);
-  assert.match(html, /id="pause-automation"/);
-  assert.match(html, /id="clear-pause"/);
-  assert.match(html, /enables it automatically/);
-  assert.match(preload, /clearAutomationPause/);
-  assert.match(script, /clearAutomationPause/);
+  assert.doesNotMatch(html, /id="pause-automation"/);
+  assert.doesNotMatch(html, /id="clear-pause"/);
   assert.match(script, /saveAutomationAssignment/);
-  assert.match(script, /setAutomationEnabled\(false\)/);
   assert.match(script, /renderStatusPanel/);
-  assert.match(script, /transaction already submitted to C4 cannot be cancelled/);
   assert.match(html, /class="automation-fleet-row"/);
   assert.match(html, /class="field-grid compact-field-grid"/);
 
@@ -91,22 +89,21 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   assert.match(styles, /--cyan:/);
   assert.match(styles, /\.page-view\[hidden\]/);
   assert.match(styles, /\.compact-field-grid/);
+  assert.doesNotMatch(styles, /live-automation|metric-grid|simulation-row/);
 });
 
-test('shell exposes the zero-reserve Eternity and Ioki Copper loop preview', async () => {
+test('shell drops the zero-reserve preview and the manual simulation controls', async () => {
   const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
   const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
-  assert.match(html, /Copper Mining Loop/);
-  assert.match(html, /Food until cargo full/);
-  assert.match(html, /Food until ammo empty/);
-  assert.match(html, /Food to load/);
+  for (const gone of ['Copper Mining Loop', 'Food until cargo full', 'Food until ammo empty', 'Food to load', 'preview-pill', 'Run signed simulation', 'nothing will be submitted', 'Next signed transaction']) {
+    assert.doesNotMatch(html, new RegExp(gone));
+  }
+  // The Automation status card keeps its "Preview only" default text; only the
+  // zero-reserve section (and its preview pill) is gone.
   assert.match(html, /Preview only/);
+  assert.doesNotMatch(script, /simulateNextStep|renderCopperLoop|unavoidableFoodRoundingRaw|transactionSignature|signature verified|simulateNextCopperStep/);
+  // The fleet State pill estimate stays: it is fed by the same cached plan.
   assert.match(script, /copperLoop/);
-  assert.match(script, /unavoidableFoodRoundingRaw/);
-  assert.match(html, /Run signed simulation/);
-  assert.match(html, /nothing will be submitted/);
-  assert.match(script, /signature verified/);
-  assert.match(script, /transactionSignature/);
-  assert.match(script, /simulateNextCopperStep/);
-  assert.match(html, /nothing will be submitted|Next signed transaction/);
+  assert.match(script, /estimateCurrentCopper/);
+  assert.match(script, /miningPillContent/);
 });
