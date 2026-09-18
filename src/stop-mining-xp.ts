@@ -2,12 +2,7 @@ import { createSolanaRpc, getAddressCodec, getAddressEncoder, getProgramDerivedA
 import { SAGE_PROGRAM_ADDRESS } from '@staratlas/dev-sage';
 import type { StopMiningCareerXpAccounts, XpBudgetAccounts } from './mining-plans.js';
 
-/** Career-XP category accounts the deployed StarFrame program reads from the
- * Game account's points config (pilot, mining, council-rank) and the points
- * program that owns them. Same addresses SLYA uses for this chain family. */
-export const PILOT_XP_CATEGORY = 'PiLotBQoUBUvKxMrrQbuR3qDhqgwLJctWsXj3uR7fGs' as Address;
-export const MINING_XP_CATEGORY = 'MineMBxARiRdMh7s1wdStSK4Ns3YfnLjBfvF5ZCnzuw' as Address;
-export const COUNCIL_RANK_XP_CATEGORY = 'XPneyd1Wvoay3aAa24QiKyPjs8SUbZnGg5xvpKvTgN9' as Address;
+/** Points runtime program used after the StarFrame XP-budget accounts. */
 export const POINTS_PROGRAM = 'Point2iBvz7j5TMVef8nEgpmz4pDr7tU7v3RjAfkQbM' as Address;
 
 const SAGE_ADDRESS = SAGE_PROGRAM_ADDRESS as Address;
@@ -26,13 +21,19 @@ async function findProgramAddress(seeds: readonly (Uint8Array | string)[], progr
   return pda as Address;
 }
 
-/** Derives the per-category UserPointsAccount PDA:
- * seeds ["UserPointsAccount", xpCategory, userProfile] under the points program. */
-export function deriveUserPointsAccount(xpCategory: Address, userProfile: Address): Promise<Address> {
+/** Derives the post-reset StarFrame CareerXpBudget account:
+ * seeds ["CareerXpBudget", game, character] under the C4 SAGE program. */
+export function deriveCareerXpBudget(gameId: Address, characterId: Address): Promise<Address> {
   return findProgramAddress(
-    [seed('UserPointsAccount'), seed(encoder.encode(xpCategory)), seed(encoder.encode(userProfile))],
-    POINTS_PROGRAM,
+    [seed('CareerXpBudget'), seed(encoder.encode(gameId)), seed(encoder.encode(characterId))],
+    SAGE_ADDRESS,
   );
+}
+
+/** Derives the post-reset StarFrame XP budget configuration account:
+ * seeds ["XpBudgetConfig", game] under the C4 SAGE program. */
+export function deriveXpBudgetConfig(gameId: Address): Promise<Address> {
+  return findProgramAddress([seed('XpBudgetConfig'), seed(encoder.encode(gameId))], SAGE_ADDRESS);
 }
 
 /** Derives the game ProgressionConfig PDA:
@@ -41,12 +42,12 @@ export function deriveProgressionConfig(gameId: Address): Promise<Address> {
   return findProgramAddress([seed('ProgressionConfig'), seed(encoder.encode(gameId))], SAGE_ADDRESS);
 }
 
-function xpBudget(category: Address, userProfile: Address, modifier: Address): Promise<XpBudgetAccounts> {
-  return deriveUserPointsAccount(category, userProfile).then((userPointsAccount) => ({
-    userPointsAccount,
-    pointsCategory: category,
+function xpBudget(careerXpBudget: Address, xpBudgetConfig: Address, modifier: Address): XpBudgetAccounts {
+  return {
+    careerXpBudget,
+    xpBudgetConfig,
     pointsModifierAccount: modifier,
-  }));
+  };
 }
 
 export interface StopMiningXpModifiers {
@@ -94,7 +95,7 @@ export function parseStopMiningXpModifiers(raw: Uint8Array): StopMiningXpModifie
 export async function resolveStopMiningCareerXp(
   rpcUrl: string,
   gameId: Address,
-  userProfile: Address,
+  characterId: Address,
 ): Promise<StopMiningCareerXpAccounts> {
   const rpc = createSolanaRpc(rpcUrl);
   const account = await rpc.getAccountInfo(gameId, { encoding: 'base64', commitment: 'confirmed' }).send();
@@ -106,12 +107,14 @@ export async function resolveStopMiningCareerXp(
     throw new Error(`Game account ${gameId} points config is unreadable: ${(error as Error).message}`);
   }
 
-  const [pilot, mining, councilRank, progressionConfig] = await Promise.all([
-    xpBudget(PILOT_XP_CATEGORY, userProfile, modifiers.pilot),
-    xpBudget(MINING_XP_CATEGORY, userProfile, modifiers.mining),
-    xpBudget(COUNCIL_RANK_XP_CATEGORY, userProfile, modifiers.councilRank),
+  const [careerXpBudget, xpBudgetConfig, progressionConfig] = await Promise.all([
+    deriveCareerXpBudget(gameId, characterId),
+    deriveXpBudgetConfig(gameId),
     deriveProgressionConfig(gameId),
   ]);
+  const pilot = xpBudget(careerXpBudget, xpBudgetConfig, modifiers.pilot);
+  const mining = xpBudget(careerXpBudget, xpBudgetConfig, modifiers.mining);
+  const councilRank = xpBudget(careerXpBudget, xpBudgetConfig, modifiers.councilRank);
 
   return { pilot, mining, councilRank, progressionConfig, pointsProgram: POINTS_PROGRAM };
 }

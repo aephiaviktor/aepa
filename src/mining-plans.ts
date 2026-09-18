@@ -1,7 +1,6 @@
 import {
   SAGE_PROGRAM_ADDRESS,
   getStartMiningAsteroidInstructionDataEncoder,
-  getStopMiningAsteroidInstructionDataEncoder,
 } from '@staratlas/dev-sage';
 import { AccountRole, address, type AccountMeta, type Address, type Instruction, type ReadonlyUint8Array } from '@solana/kit';
 import { createPlan, type Plan } from '@aephia/atlas-kit/planning';
@@ -30,24 +29,6 @@ export interface StartMiningPlanInput {
   resourceName: string;
 }
 
-export interface StopMiningPlanInput {
-  authorization: MiningAuthorization;
-  fleet: Address;
-  character: Address;
-  asteroid: Address;
-  game: Address;
-  regionTracker?: Address;
-  crewBinding?: Address;
-  fleetName: string;
-  /** Career-XP budget accounts the post-reset C4 StarFrame program requires on
-   * the stop-mining instruction (xp_runtime). Resolved from the Game account's
-   * points config + the points program + PDAs; without them the deployed
-   * program rejects the stop with
-   * "Career XP budget required - xp_budget_accounts_required".
-   * Mirror of the trailing account group SLYA sends for the same instruction. */
-  careerXp?: StopMiningCareerXpAccounts;
-}
-
 export interface StopMiningCareerXpAccounts {
   pilot: XpBudgetAccounts;
   mining: XpBudgetAccounts;
@@ -57,8 +38,8 @@ export interface StopMiningCareerXpAccounts {
 }
 
 export interface XpBudgetAccounts {
-  userPointsAccount: Address;
-  pointsCategory: Address;
+  careerXpBudget: Address;
+  xpBudgetConfig: Address;
   pointsModifierAccount: Address;
 }
 
@@ -101,53 +82,62 @@ export function planStartMiningCopper(input: StartMiningPlanInput): Plan {
   });
 }
 
-export function planStopMiningCopper(input: StopMiningPlanInput): Plan {
-  validateAuthorization(input.authorization);
-  const ix = instruction([
-    readonlySigner(input.authorization.authority),
-    writable(input.authorization.profile),
-    readonly(input.authorization.certificate ?? SAGE_ADDRESS),
-    readonly(PROFILE_VALIDATION_PROGRAM),
-    writable(input.character),
-    writable(input.fleet),
-    readonly(input.game),
-    writable(input.asteroid),
-    input.crewBinding ? writable(input.crewBinding) : readonly(SAGE_ADDRESS),
-    input.regionTracker ? readonly(input.regionTracker) : readonly(SAGE_ADDRESS),
-    ...(input.careerXp ? careerXpAccountMetas(input.careerXp) : []),
-  ], getStopMiningAsteroidInstructionDataEncoder().encode({ keyIndex: input.authorization.keyIndex }));
-  const description = `Stop fleet ${input.fleetName} mining and settle its Copper Ore output.`;
-  return createPlan({
-    kind: 'fleet.mining.stop',
-    summary: description,
-    steps: [{ instruction: ix, describes: description, signers: [input.authorization.authority] }],
-    preconditions: [],
-  });
-}
-
 /** Career-XP budget account metas the post-reset C4 StarFrame program requires
  * when settling a mining session. The failed stop reached the XP runtime with
  * every other account accepted and was rejected solely with
  * "Career XP budget required - xp_budget_accounts_required", so only these
  * trailing budget accounts are appended: the three XP budget groups (each
- * userPointsAccount, pointsCategory, pointsModifierAccount), then the
+ * CareerXpBudget, XpBudgetConfig, pointsModifierAccount), then the
  * ProgressionConfig and the points program.
  */
-function careerXpAccountMetas(xp: NonNullable<StopMiningPlanInput['careerXp']>): AccountMeta[] {
+function careerXpAccountMetas(xp: StopMiningCareerXpAccounts): AccountMeta[] {
   return [
     // pilot budget
-    writable(xp.pilot.userPointsAccount),
-    readonly(xp.pilot.pointsCategory),
+    writable(xp.pilot.careerXpBudget),
+    readonly(xp.pilot.xpBudgetConfig),
     readonly(xp.pilot.pointsModifierAccount),
     // mining budget
-    writable(xp.mining.userPointsAccount),
-    readonly(xp.mining.pointsCategory),
+    writable(xp.mining.careerXpBudget),
+    readonly(xp.mining.xpBudgetConfig),
     readonly(xp.mining.pointsModifierAccount),
     // council-rank budget
-    writable(xp.councilRank.userPointsAccount),
-    readonly(xp.councilRank.pointsCategory),
+    writable(xp.councilRank.careerXpBudget),
+    readonly(xp.councilRank.xpBudgetConfig),
     readonly(xp.councilRank.pointsModifierAccount),
     readonly(xp.progressionConfig),
     readonly(xp.pointsProgram),
   ];
+}
+
+/** Extends Atlas Kit next's freshly guarded stop-mining Plan with the trailing
+ * Career-XP accounts required by the post-reset StarFrame runtime. The native
+ * planner remains responsible for canonical account selection and the
+ * persisted fleet-mining safeguard; this function refuses any other layout. */
+export function appendStopMiningCareerXp(plan: Plan, xp: StopMiningCareerXpAccounts): Plan {
+  const step = plan.steps[0];
+  const accounts = step?.instruction.accounts;
+  const safeguard = plan.preconditions.find((value) => value.kind === 'fleet-mining');
+  if (
+    plan.steps.length !== 1 ||
+    plan.kind !== 'fleet.stop-mining' ||
+    step?.instruction.programAddress !== SAGE_ADDRESS ||
+    step.instruction.data === undefined ||
+    accounts?.length !== 10 ||
+    safeguard === undefined ||
+    accounts[5]?.address !== safeguard.address ||
+    accounts[6]?.address !== safeguard.game ||
+    accounts[1]?.address !== safeguard.profile ||
+    accounts[7]?.address !== safeguard.asteroid
+  ) {
+    throw new Error('Atlas Kit returned an unsupported or unguarded stop-mining Plan');
+  }
+  return createPlan({
+    kind: plan.kind,
+    summary: plan.summary,
+    steps: [{
+      ...step,
+      instruction: instruction([...accounts, ...careerXpAccountMetas(xp)], step.instruction.data),
+    }],
+    preconditions: plan.preconditions,
+  });
 }

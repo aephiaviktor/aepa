@@ -2,14 +2,14 @@ import { createSageClient, resolveCargo, type FleetView } from '@aephia/atlas-ki
 import { getStarbasePlayerForCharacterAtSystem } from '@aephia/atlas-kit/starbases';
 import { planFleetTransferCargoAtStarbase } from '@aephia/atlas-kit/cargo/actions';
 import { planFleetDock, planFleetUndock } from '@aephia/atlas-kit/fleets/actions';
+import { planFleetStopMining } from '@aephia/atlas-kit/mining/actions';
 import { assemblePlan, createPlan, simulatePlan, type Plan } from '@aephia/atlas-kit/planning';
 import { SAGE_PROGRAM_ADDRESS, getTransferCargoToFleetInstructionDataEncoder } from '@staratlas/dev-sage';
 import { AccountRole, address, createSolanaRpc, type AccountMeta, type Instruction, type ReadonlyUint8Array, type Signature } from '@solana/kit';
 import { decideCopperLoopNextStep } from './copper-loop.js';
 import type { FleetRecord } from './database.js';
 import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
-import { planStartMiningCopper, planStopMiningCopper } from './mining-plans.js';
-import type { StopMiningCareerXpAccounts } from './mining-plans.js';
+import { appendStopMiningCareerXp, planStartMiningCopper, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
 
@@ -349,10 +349,13 @@ async function planForDecision(
     return planStartMiningCopper({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [311], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: 'Copper Ore' });
   }
   if (decision.kind === 'stop-mining') {
-    const careerXp: StopMiningCareerXpAccounts = await resolveStopMiningCareerXp(rpcUrl, fleet.game, authorization.profile).catch((error: unknown) => {
-      throw new Error(`Career-XP budget accounts for stop-mining could not be resolved: ${(error as Error)?.message ?? String(error)}`);
-    });
-    return planStopMiningCopper({ authorization, fleet: fleet.address, character: character.address, asteroid: asteroid.address, game: fleet.game, regionTracker: REGION_TRACKER, fleetName: fleet.name, careerXp });
+    const [careerXp, guardedStopPlan]: [StopMiningCareerXpAccounts, Plan] = await Promise.all([
+      resolveStopMiningCareerXp(rpcUrl, fleet.game, character.address).catch((error: unknown) => {
+        throw new Error(`Career-XP budget accounts for stop-mining could not be resolved: ${(error as Error)?.message ?? String(error)}`);
+      }),
+      planFleetStopMining(sage.context, fleet, { authorization }),
+    ]);
+    return appendStopMiningCareerXp(guardedStopPlan, careerXp);
   }
   throw new Error(decision.kind === 'blocked' ? decision.reason : `The next action is waiting until ${decision.untilUnixSeconds.toString()}`);
 }
