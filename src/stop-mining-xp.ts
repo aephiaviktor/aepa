@@ -55,6 +55,18 @@ export interface StopMiningXpModifiers {
   councilRank: Address;
 }
 
+/** Normalizes the account-data shapes returned by current and older Kit RPC
+ * transformers when `encoding: 'base64'` is requested. */
+export function decodeBase64AccountData(dataValue: unknown): Uint8Array {
+  if (dataValue instanceof Uint8Array) return dataValue;
+  if (Array.isArray(dataValue) && typeof dataValue[0] === 'string') return Uint8Array.from(Buffer.from(dataValue[0], 'base64'));
+  if (dataValue && typeof dataValue === 'object' && 'data' in dataValue) {
+    const nested = (dataValue as { data?: unknown }).data;
+    if (Array.isArray(nested) && typeof nested[0] === 'string') return Uint8Array.from(Buffer.from(nested[0], 'base64'));
+  }
+  throw new Error('account data is not base64-readable');
+}
+
 /** Parses the six fixed-size SagePointsCategory records embedded in Game. */
 export function parseStopMiningXpModifiers(raw: Uint8Array): StopMiningXpModifiers {
   // Layout after version(1) + updateId(8) + profile(32) + gameState(32):
@@ -87,14 +99,9 @@ export async function resolveStopMiningCareerXp(
   const rpc = createSolanaRpc(rpcUrl);
   const account = await rpc.getAccountInfo(gameId, { encoding: 'base64', commitment: 'confirmed' }).send();
   if (!account.value) throw new Error(`Game account ${gameId} was not found`);
-  const dataValue = account.value.data;
-  if (!dataValue || typeof dataValue !== 'object' || !('data' in dataValue) || !Array.isArray(dataValue.data) || typeof dataValue.data[0] !== 'string') {
-    throw new Error(`Game account ${gameId} data is not base64-readable`);
-  }
-  const raw = Buffer.from(dataValue.data[0], 'base64');
   let modifiers: StopMiningXpModifiers;
   try {
-    modifiers = parseStopMiningXpModifiers(raw);
+    modifiers = parseStopMiningXpModifiers(decodeBase64AccountData(account.value.data));
   } catch (error) {
     throw new Error(`Game account ${gameId} points config is unreadable: ${(error as Error).message}`);
   }
