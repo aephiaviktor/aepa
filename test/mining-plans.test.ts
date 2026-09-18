@@ -32,3 +32,47 @@ test('stop mining plan uses optional-account sentinels and exact discriminator',
   assert.equal(plan.steps[0].instruction.accounts?.[8].role, AccountRole.READONLY);
   assert.deepEqual(getStopMiningAsteroidInstructionDataDecoder().decode(plan.steps[0].instruction.data!), { discriminator: new Uint8Array([181,77,45,163,103,27,211,81]), keyIndex: 0 });
 });
+
+test('stop mining appends all three Career-XP budgets in deployed-program order', () => {
+  const pilot = {
+    userPointsAccount: a('8qbHbw2BbbTHBW1sbeqakYXVXw9fWnWj6JtQvX3C3LTM'),
+    pointsCategory: a('PiLotBQoUBUvKxMrrQbuR3qDhqgwLJctWsXj3uR7fGs'),
+    pointsModifierAccount: a('11111111111111111111111111111111'),
+  };
+  const mining = {
+    userPointsAccount: a('SysvarRent111111111111111111111111111111111'),
+    pointsCategory: a('MineMBxARiRdMh7s1wdStSK4Ns3YfnLjBfvF5ZCnzuw'),
+    pointsModifierAccount: a('SysvarC1ock11111111111111111111111111111111'),
+  };
+  const councilRank = {
+    userPointsAccount: a('Vote111111111111111111111111111111111111111'),
+    pointsCategory: a('XPneyd1Wvoay3aAa24QiKyPjs8SUbZnGg5xvpKvTgN9'),
+    pointsModifierAccount: a('Stake11111111111111111111111111111111111111'),
+  };
+  const progressionConfig = a('Config1111111111111111111111111111111111111');
+  const pointsProgram = a('Point2iBvz7j5TMVef8nEgpmz4pDr7tU7v3RjAfkQbM');
+  const plan = planStopMiningCopper({
+    authorization,
+    fleet,
+    game,
+    asteroid,
+    character: authorization.profile,
+    fleetName: 'MF-01',
+    careerXp: { pilot, mining, councilRank, progressionConfig, pointsProgram },
+  });
+  const trailing = plan.steps[0].instruction.accounts!.slice(10);
+  assert.equal(plan.steps[0].instruction.accounts?.length, 21);
+  assert.deepEqual(trailing.map(({ address: account, role }) => [account, role]), [
+    [pilot.userPointsAccount, AccountRole.WRITABLE],
+    [pilot.pointsCategory, AccountRole.READONLY],
+    [pilot.pointsModifierAccount, AccountRole.READONLY],
+    [mining.userPointsAccount, AccountRole.WRITABLE],
+    [mining.pointsCategory, AccountRole.READONLY],
+    [mining.pointsModifierAccount, AccountRole.READONLY],
+    [councilRank.userPointsAccount, AccountRole.WRITABLE],
+    [councilRank.pointsCategory, AccountRole.READONLY],
+    [councilRank.pointsModifierAccount, AccountRole.READONLY],
+    [progressionConfig, AccountRole.READONLY],
+    [pointsProgram, AccountRole.READONLY],
+  ]);
+});

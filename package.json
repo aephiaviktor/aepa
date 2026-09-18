@@ -1,11 +1,14 @@
 {
   "name": "aepa",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "Aephia C4 automation desktop app.",
   "private": true,
   "type": "module",
   "main": "dist/electron/main.js",
   "scripts": {
+    "atlas-kit:update": "npm update @aephia/atlas-kit && npm run atlas-kit:check",
+    "atlas-kit:check": "node tools/check-atlas-kit-next.mjs",
+    "prebuild": "npm run atlas-kit:update",
     "build": "tsc -p tsconfig.json",
     "dev": "npm run build && electron .",
     "start": "electron .",
@@ -13,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@aephia/atlas-kit": "0.5.0",
+    "@aephia/atlas-kit": "next",
     "@solana/kit": "6.10.0",
     "@staratlas/dev-sage": "0.52.0"
   },

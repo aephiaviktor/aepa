@@ -39,6 +39,27 @@ export interface StopMiningPlanInput {
   regionTracker?: Address;
   crewBinding?: Address;
   fleetName: string;
+  /** Career-XP budget accounts the post-reset C4 StarFrame program requires on
+   * the stop-mining instruction (xp_runtime). Resolved from the Game account's
+   * points config + the points program + PDAs; without them the deployed
+   * program rejects the stop with
+   * "Career XP budget required - xp_budget_accounts_required".
+   * Mirror of the trailing account group SLYA sends for the same instruction. */
+  careerXp?: StopMiningCareerXpAccounts;
+}
+
+export interface StopMiningCareerXpAccounts {
+  pilot: XpBudgetAccounts;
+  mining: XpBudgetAccounts;
+  councilRank: XpBudgetAccounts;
+  progressionConfig: Address;
+  pointsProgram: Address;
+}
+
+export interface XpBudgetAccounts {
+  userPointsAccount: Address;
+  pointsCategory: Address;
+  pointsModifierAccount: Address;
 }
 
 const readonly = (value: Address) => ({ address: value, role: AccountRole.READONLY });
@@ -93,6 +114,7 @@ export function planStopMiningCopper(input: StopMiningPlanInput): Plan {
     writable(input.asteroid),
     input.crewBinding ? writable(input.crewBinding) : readonly(SAGE_ADDRESS),
     input.regionTracker ? readonly(input.regionTracker) : readonly(SAGE_ADDRESS),
+    ...(input.careerXp ? careerXpAccountMetas(input.careerXp) : []),
   ], getStopMiningAsteroidInstructionDataEncoder().encode({ keyIndex: input.authorization.keyIndex }));
   const description = `Stop fleet ${input.fleetName} mining and settle its Copper Ore output.`;
   return createPlan({
@@ -101,4 +123,31 @@ export function planStopMiningCopper(input: StopMiningPlanInput): Plan {
     steps: [{ instruction: ix, describes: description, signers: [input.authorization.authority] }],
     preconditions: [],
   });
+}
+
+/** Career-XP budget account metas the post-reset C4 StarFrame program requires
+ * when settling a mining session. The failed stop reached the XP runtime with
+ * every other account accepted and was rejected solely with
+ * "Career XP budget required - xp_budget_accounts_required", so only these
+ * trailing budget accounts are appended: the three XP budget groups (each
+ * userPointsAccount, pointsCategory, pointsModifierAccount), then the
+ * ProgressionConfig and the points program.
+ */
+function careerXpAccountMetas(xp: NonNullable<StopMiningPlanInput['careerXp']>): AccountMeta[] {
+  return [
+    // pilot budget
+    writable(xp.pilot.userPointsAccount),
+    readonly(xp.pilot.pointsCategory),
+    readonly(xp.pilot.pointsModifierAccount),
+    // mining budget
+    writable(xp.mining.userPointsAccount),
+    readonly(xp.mining.pointsCategory),
+    readonly(xp.mining.pointsModifierAccount),
+    // council-rank budget
+    writable(xp.councilRank.userPointsAccount),
+    readonly(xp.councilRank.pointsCategory),
+    readonly(xp.councilRank.pointsModifierAccount),
+    readonly(xp.progressionConfig),
+    readonly(xp.pointsProgram),
+  ];
 }

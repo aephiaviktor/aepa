@@ -9,6 +9,8 @@ import { decideCopperLoopNextStep } from './copper-loop.js';
 import type { FleetRecord } from './database.js';
 import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
 import { planStartMiningCopper, planStopMiningCopper } from './mining-plans.js';
+import type { StopMiningCareerXpAccounts } from './mining-plans.js';
+import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
 
 import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed-simulation.js';
@@ -329,6 +331,7 @@ async function planForDecision(
   asteroid: Awaited<ReturnType<Awaited<ReturnType<ReturnType<typeof createSageClient>['systems']['byId']>>['asteroids']['all']>>[number],
   authorization: { profile: ReturnType<typeof address>; authority: ReturnType<typeof address>; keyIndex: number },
   decision: ReturnType<typeof decideCopperLoopNextStep>,
+  rpcUrl: string,
 ): Promise<Plan> {
   if (decision.kind === 'dock') return planFleetDock(sage.context, fleet, { authorization });
   if (decision.kind === 'undock') return planFleetUndock(sage.context, fleet, { authorization });
@@ -346,7 +349,10 @@ async function planForDecision(
     return planStartMiningCopper({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [311], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: 'Copper Ore' });
   }
   if (decision.kind === 'stop-mining') {
-    return planStopMiningCopper({ authorization, fleet: fleet.address, character: character.address, asteroid: asteroid.address, game: fleet.game, regionTracker: REGION_TRACKER, fleetName: fleet.name });
+    const careerXp: StopMiningCareerXpAccounts = await resolveStopMiningCareerXp(rpcUrl, fleet.game, authorization.profile).catch((error: unknown) => {
+      throw new Error(`Career-XP budget accounts for stop-mining could not be resolved: ${(error as Error)?.message ?? String(error)}`);
+    });
+    return planStopMiningCopper({ authorization, fleet: fleet.address, character: character.address, asteroid: asteroid.address, game: fleet.game, regionTracker: REGION_TRACKER, fleetName: fleet.name, careerXp });
   }
   throw new Error(decision.kind === 'blocked' ? decision.reason : `The next action is waiting until ${decision.untilUnixSeconds.toString()}`);
 }
@@ -361,7 +367,7 @@ async function prepareNextCopperStep(
   const decision = forcedAction === 'stop-mining' && observed.fleet.state.kind === 'mining'
     ? { kind: 'stop-mining' as const }
     : observed.decision;
-  const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision);
+  const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl);
   return { ...observed, decision, plan };
 }
 
@@ -674,6 +680,12 @@ async function executeAuthorizedCopperStepOnce(
 
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
     onProgress?.('transaction-assembled');
+    // Pre-send simulation gate: verify the signed transaction read-only before
+    // broadcasting. Any program rejection (e.g. the deployed StarFrame
+    // "Career XP budget required" check) surfaces here, nothing is submitted,
+    // and the runner pauses with the real reason instead of a doomed broadcast.
+    const simulation = await signAndSimulateTransaction(rpc, transaction, secretKey, prepared.key.authority);
+    onProgress?.('simulation-verified', { slot: simulation.slot.toString() });
     const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
 
     const confirmationDeadline = Date.now() + 90_000;

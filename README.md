@@ -15,7 +15,7 @@ the operational direction follows SLYA, rebuilt against the C4 account model.
 - Stores the C4 authority signer with Electron/Windows OS encryption; the key is
   never stored in SQLite and is revalidated against the active Profile authority.
 - Sends the proven `MF-01 / Eternity / Ioki / Copper Ore / same-system` cycle
-  without any client-side or RPC-node simulation before submission.
+  only after a signature-verified, read-only pre-send simulation succeeds.
 
 ## Automatic-send model
 
@@ -24,8 +24,8 @@ separate enable step. The runner executes at most one action per tick and AEPA:
 
 1. reads fresh C4 state and selects at most one next action;
 2. re-reads and verifies the exact MF-01 action and active authority;
-3. signs locally and sends exactly once, with no simulation and no RPC preflight
-   (maxRetries 0);
+3. signs and simulates the exact assembled transaction read-only; only on success
+   does it send exactly once with RPC preflight disabled (`maxRetries: 0`);
 4. waits for confirmation and verifies resulting fleet state;
 5. records the checkpoint and activity durably before advancing.
 
@@ -40,7 +40,8 @@ Cancel; Cancel restores the previously saved assignments.
 
 A right-side **Status** bar (opened above Settings) lists every fleet and its
 current state in real time, updated from the cached snapshot without extra
-writes. The automatic path never simulates before sending.
+writes. Every automatic transaction must pass the signed pre-send simulation
+gate before AEPA broadcasts it.
 
 Other resources, destinations, fleets, and inter-system travel may be explored
 in the configuration UI, but the trusted main process rejects them for automatic
@@ -86,6 +87,13 @@ npm test
 npm run typecheck
 npm run dev
 ```
+
+AEPA tracks the unreleased Atlas Kit line with `@aephia/atlas-kit: "next"`.
+Every build runs `npm run atlas-kit:update` and then verifies that the declared,
+locked, and installed versions match npm's current `next` dist-tag. This is
+intentionally network-dependent and fails closed rather than building against a
+stale prerelease. Development API guidance comes from
+<https://develop.atlas-kit-docs.pages.dev/>.
 
 The default RPC endpoint is `https://testnet-rpc.z.ink`. A custom HTTP(S)
 endpoint can be selected in Settings. Player Profile addresses are public
