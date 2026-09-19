@@ -9,7 +9,7 @@ import { AccountRole, address, createSolanaRpc, type AccountMeta, type Instructi
 import { decideCopperLoopNextStep } from './copper-loop.js';
 import type { FleetRecord } from './database.js';
 import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
-import { appendStopMiningCareerXp, planStartMiningCopper, type StopMiningCareerXpAccounts } from './mining-plans.js';
+import { appendStopMiningCareerXp, planStartMiningResource, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
 
@@ -17,6 +17,14 @@ import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed
 
 const CARGO_STORAGE_SCALE = 256n;
 const ETERNITY_SYSTEM_ID = 10;
+const DEFAULT_MINING_SCOPE: MiningLoopScope = {
+  homeSystemId: 10,
+  homeSystemName: 'Eternity',
+  resourceId: 311,
+  resourceName: 'Copper Ore',
+  destinationAddress: 'BwkkW5fgeot3xjkttvSMXHXHjx3MR8B8ysJ4jB2eDRsU',
+  destinationName: 'Ioki',
+};
 const FLEET_RATE_SCALE = 16_384n;
 const RICHNESS_SCALE = 281_474_976_710_656n;
 const REGION_TRACKER = address('CbwrSoauo4D6HAJY1xuvjgCxHh3999Be68otnbThBQsi');
@@ -61,6 +69,15 @@ export function assertCopperLoadFitsCargoStorage(input: {
   if (input.cargoUsedRaw + required > input.cargoCapacityRaw) {
     throw new PlannerStageError(`Fleet cargo storage requires ${required.toString()} raw units but only ${(input.cargoCapacityRaw - input.cargoUsedRaw).toString()} are free; reduce the Food load and retry.`);
   }
+}
+
+export interface MiningLoopScope {
+  homeSystemId: number;
+  homeSystemName: string;
+  resourceId: number;
+  resourceName: string;
+  destinationAddress: string;
+  destinationName: string;
 }
 
 export interface CopperLoopPreview {
@@ -183,31 +200,27 @@ function ceilRatio(value: Rational): bigint {
   return (value.numerator + value.denominator - 1n) / value.denominator;
 }
 
-async function buildCopperLoopPreview(sage: ReturnType<typeof createSageClient>, fleet: FleetView): Promise<CopperLoopPreview> {
-  const home = await sage.systems.byId(ETERNITY_SYSTEM_ID, { commitment: 'confirmed', policy: 'no-store' });
-  if (home.name.toLocaleLowerCase() !== 'eternity') throw new Error('C4 system id 10 is no longer Eternity');
+async function buildMiningLoopPreview(sage: ReturnType<typeof createSageClient>, fleet: FleetView, scope: MiningLoopScope = DEFAULT_MINING_SCOPE): Promise<CopperLoopPreview> {
+  const home = await sage.systems.byId(scope.homeSystemId, { commitment: 'confirmed', policy: 'no-store' });
+  if (home.name !== scope.homeSystemName) throw new Error(`C4 system id ${scope.homeSystemId} is ${home.name}, not ${scope.homeSystemName}`);
   const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
-  const asteroid = asteroids.find((candidate) => candidate.name.toLocaleLowerCase() === 'ioki');
-  if (!asteroid) throw new Error('C4 asteroid Ioki was not found in Eternity');
-
-  const resources = await Promise.all(asteroid.details.resources.map(async (resource) => ({
-    resource,
-    cargo: await resolveCargo(sage.context, resource.cargoId),
-  })));
-  const copper = resources.find(({ cargo }) => cargo.name.toLocaleLowerCase() === 'copper ore');
-  if (!copper) throw new Error('Copper Ore was not found at Ioki');
-  const food = await resolveCargo(sage.context, 1);
+  const asteroid = asteroids.find((candidate) => String(candidate.address) === scope.destinationAddress);
+  if (!asteroid) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
+  const resourceDefinition = asteroid.details.resources.find((resource) => resource.cargoId === scope.resourceId);
+  if (!resourceDefinition) throw new Error(`${scope.resourceName} is not available at ${scope.destinationName}`);
+  const [resourceCargo, food] = await Promise.all([resolveCargo(sage.context, scope.resourceId), resolveCargo(sage.context, 1)]);
+  if (resourceCargo.name !== scope.resourceName) throw new Error(`Cargo id ${scope.resourceId} is ${resourceCargo.name}, not ${scope.resourceName}`);
 
   const preservedCargoStorageRaw = fleet.cargoHold.items
-    .filter((item) => item.id !== food.id && item.id !== copper.cargo.id)
+    .filter((item) => item.id !== food.id && item.id !== resourceCargo.id)
     .reduce((total, item) => total + (item.amount * BigInt(item.storageCost) + CARGO_STORAGE_SCALE - 1n) / CARGO_STORAGE_SCALE, 0n);
   const plan = calculateMiningFoodPlan({
     cargoCapacityRaw: fleet.capacities.cargo.total,
     preservedCargoStorageRaw,
-    copperStoragePerUnit: { numerator: BigInt(copper.cargo.storageCost), denominator: CARGO_STORAGE_SCALE },
+    copperStoragePerUnit: { numerator: BigInt(resourceCargo.storageCost), denominator: CARGO_STORAGE_SCALE },
     foodStoragePerUnit: { numerator: BigInt(food.storageCost), denominator: CARGO_STORAGE_SCALE },
     copperUnitsPerSecond: {
-      numerator: fleet.stats.cargo.miningRate.raw * copper.resource.richness.raw,
+      numerator: fleet.stats.cargo.miningRate.raw * resourceDefinition.richness.raw,
       denominator: FLEET_RATE_SCALE * RICHNESS_SCALE,
     },
     foodUnitsPerSecond: { numerator: fleet.stats.cargo.foodConsumptionRate.raw, denominator: FLEET_RATE_SCALE },
@@ -220,7 +233,7 @@ async function buildCopperLoopPreview(sage: ReturnType<typeof createSageClient>,
     homeSystem: home.name,
     asteroid: asteroid.name,
     sameSystem,
-    resource: copper.cargo.name,
+    resource: resourceCargo.name,
     limitingEvent: plan.limitingEvent,
     foodForCargoRaw: plan.foodForCargoRaw.toString(),
     foodForAmmoRaw: plan.foodForAmmoRaw.toString(),
@@ -260,14 +273,15 @@ export async function getActiveC4ProfileAuthority(settings: AppSettings): Promis
  * hold. This mirrors the service-bundle instruction assembly, which divides
  * by CARGO_STORAGE_SCALE and is the only capacity math that fits C4 raw units.
  */
-async function planCopperCargoLoad(
+async function planMiningCargoLoad(
   sage: ReturnType<typeof createSageClient>,
   fleet: FleetView,
   character: Awaited<ReturnType<ReturnType<typeof createSageClient>['characters']['forProfile']>>,
   authorization: { profile: ReturnType<typeof address>; authority: ReturnType<typeof address>; keyIndex: number },
   decision: { foodRaw: bigint; ammoRaw: bigint; fuelRaw: bigint },
+  scope: MiningLoopScope,
 ): Promise<Plan> {
-  if (fleet.state.kind !== 'docked') throw new PlannerStageError(`Cargo refill requires MF-01 to be docked, not ${fleet.state.kind}`);
+  if (fleet.state.kind !== 'docked') throw new PlannerStageError(`Cargo refill requires ${fleet.name} to be docked, not ${fleet.state.kind}`);
   const system = fleet.state.system.address;
   const starbasePlayer = await getStarbasePlayerForCharacterAtSystem(sage.context, character.address, system, { commitment: 'confirmed', policy: 'no-store' });
   const food = await resolveCargo(sage.context, 1);
@@ -315,7 +329,7 @@ async function planCopperCargoLoad(
     accounts: Object.freeze(accounts),
     data: data as ReadonlyUint8Array,
   });
-  const summary = `Refill fleet MF-01 at Starbase Eternity: load ${decision.foodRaw.toString()} Food, ${decision.ammoRaw.toString()} Ammo, and ${decision.fuelRaw.toString()} Fuel.`;
+  const summary = `Refill fleet ${fleet.name} at Starbase ${scope.homeSystemName}: load ${decision.foodRaw.toString()} Food, ${decision.ammoRaw.toString()} Ammo, and ${decision.fuelRaw.toString()} Fuel.`;
   return createPlan({
     kind: 'fleet.refill',
     summary,
@@ -333,21 +347,22 @@ async function planForDecision(
   authorization: { profile: ReturnType<typeof address>; authority: ReturnType<typeof address>; keyIndex: number },
   decision: ReturnType<typeof decideCopperLoopNextStep>,
   rpcUrl: string,
+  scope: MiningLoopScope,
 ): Promise<Plan> {
   if (decision.kind === 'dock') return planFleetDock(sage.context, fleet, { authorization });
   if (decision.kind === 'undock') return planFleetUndock(sage.context, fleet, { authorization });
   if (decision.kind === 'unload') {
     const cargoHold = [
-      ...(decision.copperRaw > 0n ? [{ cargoId: 311, amount: decision.copperRaw }] : []),
+      ...(decision.copperRaw > 0n ? [{ cargoId: scope.resourceId, amount: decision.copperRaw }] : []),
       ...(decision.foodRaw > 0n ? [{ cargoId: 1, amount: decision.foodRaw }] : []),
     ];
     return planFleetTransferCargoAtStarbase(sage.context, fleet, { authorization, direction: 'toStarbase', amounts: { cargoHold } });
   }
   if (decision.kind === 'load') {
-    return planCopperCargoLoad(sage, fleet, character, authorization, decision);
+    return planMiningCargoLoad(sage, fleet, character, authorization, decision, scope);
   }
   if (decision.kind === 'start-mining') {
-    return planStartMiningCopper({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [311], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: 'Copper Ore' });
+    return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [scope.resourceId], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
   }
   if (decision.kind === 'stop-mining') {
     const [careerXp, guardedStopPlan]: [StopMiningCareerXpAccounts, Plan] = await Promise.all([
@@ -368,44 +383,49 @@ async function prepareNextCopperStep(
   targetStopAtUnixSeconds?: bigint,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ) {
-  const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
+  const observed = await observeMiningLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
   const decision = forcedAction === 'stop-mining' && observed.fleet.state.kind === 'mining'
     ? { kind: 'stop-mining' as const }
     : observed.decision;
-  const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl);
+  const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl, scope);
   return { ...observed, decision, plan };
 }
 
-async function observeCopperLoop(
+async function observeMiningLoop(
   sage: ReturnType<typeof createSageClient>,
   settings: AppSettings,
   targetStopAtUnixSeconds?: bigint,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ) {
   const profileAddress = address(settings.playerProfile);
   const [profile, character, home] = await Promise.all([
     sage.profiles.get(profileAddress, { commitment: 'confirmed', policy: 'no-store' }),
     sage.characters.forProfile(profileAddress, { commitment: 'confirmed', policy: 'no-store' }),
-    sage.systems.byId(ETERNITY_SYSTEM_ID, { commitment: 'confirmed', policy: 'no-store' }),
+    sage.systems.byId(scope.homeSystemId, { commitment: 'confirmed', policy: 'no-store' }),
   ]);
+  if (home.name !== scope.homeSystemName) throw new Error(`Configured Home Starbase system is ${home.name}, not ${scope.homeSystemName}`);
   const fleets = await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' });
   const fleet = fleets.find((candidate) => fleetAddress ? String(candidate.address) === fleetAddress : candidate.name === fleetName);
   if (!fleet) throw new Error(`Fleet ${fleetName} was not found`);
   if (fleet.name !== fleetName) throw new Error(`Fleet identity mismatch: ${fleetAddress} is ${fleet.name}, not ${fleetName}`);
   const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
-  const asteroid = asteroids.find((candidate) => candidate.name === 'Ioki');
-  if (!asteroid) throw new Error('C4 asteroid Ioki was not found in Eternity');
-  const preview = await buildCopperLoopPreview(sage, fleet);
+  const asteroid = asteroids.find((candidate) => String(candidate.address) === scope.destinationAddress);
+  if (!asteroid) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
+  const preview = await buildMiningLoopPreview(sage, fleet, scope);
   const key = activeProfileKey(profile);
   const authorization = { profile: profileAddress, authority: key.authority, keyIndex: key.keyIndex };
   const automaticDecision = decideCopperLoopNextStep({
     state: fleet.state,
     atEternity: home.coordinates.x === fleet.location.x && home.coordinates.y === fleet.location.y,
+    fleetName: fleet.name,
+    homeSystemName: scope.homeSystemName,
     foodRaw: cargoAmount(fleet, 1),
     targetFoodRaw: BigInt(preview.foodToLoadRaw),
-    copperRaw: cargoAmount(fleet, 311),
+    copperRaw: cargoAmount(fleet, scope.resourceId),
     ammoRaw: fleet.ammo.amount,
     ammoTargetRaw: fleet.capacities.ammo.total,
     fuelRaw: fleet.fuel.amount,
@@ -434,7 +454,7 @@ async function prepareServiceBundle(sage: ReturnType<typeof createSageClient>, s
   const fleet = fleets.find((candidate) => candidate.name === 'MF-01');
   if (!fleet) throw new Error('Fleet MF-01 was not found');
   if (fleet.state.kind !== 'docked') throw new Error(`Service bundle requires MF-01 to be docked, not ${fleet.state.kind}`);
-  const preview = await buildCopperLoopPreview(sage, fleet);
+  const preview = await buildMiningLoopPreview(sage, fleet);
   const key = activeProfileKey(profile);
   const authorization = { profile: profileAddress, authority: key.authority, keyIndex: key.keyIndex };
   const amounts = calculateServiceBundleAmounts({
@@ -650,7 +670,7 @@ export async function simulateNextCopperStepSigned(settings: AppSettings, secret
 }
 
 /** Reads fresh chain state without signing or sending. */
-export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint, fleetName = 'MF-01', fleetAddress?: string): Promise<{
+export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint, fleetName = 'MF-01', fleetAddress?: string, scope: MiningLoopScope = DEFAULT_MINING_SCOPE): Promise<{
   decision: ReturnType<typeof decideCopperLoopNextStep>;
   targetMiningSeconds: bigint;
 }> {
@@ -658,7 +678,7 @@ export async function inspectNextCopperStep(settings: AppSettings, targetStopAtU
   const rpc = createSolanaRpc(settings.rpcUrl);
   const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
   try {
-    const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
+    const observed = await observeMiningLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
     return { decision: observed.decision, targetMiningSeconds: BigInt(observed.preview.targetMiningSeconds) };
   } finally {
     await sage.dispose();
@@ -676,12 +696,13 @@ async function executeAuthorizedCopperStepOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
   if (!settings.playerProfile) throw new Error(`Configure a Player Profile before executing the authorized ${expectedAction}`);
   const rpc = createSolanaRpc(settings.rpcUrl);
   const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
   try {
-    const prepared = await prepareNextCopperStep(sage, settings, expectedAction, undefined, fleetName, fleetAddress);
+    const prepared = await prepareNextCopperStep(sage, settings, expectedAction, undefined, fleetName, fleetAddress, scope);
     assertAuthorizedCopperStep(expectedAction, {
       fleet: prepared.fleet.name,
       action: prepared.decision.kind,
@@ -732,10 +753,10 @@ async function executeAuthorizedCopperStepOnce(
       resultingFleetState = miningFleet.state;
       resultingNextStep = 'waiting';
     } else {
-      let resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress);
+      let resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress, scope);
       while (resulting.decision.kind === expectedAction && Date.now() < stateDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
-        resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress);
+        resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress, scope);
       }
       if (resulting.decision.kind === expectedAction) throw new Error(`${expectedAction} transaction ${submission.signature} confirmed, but the resulting fleet state was not observed within 45 seconds`);
       resultingFleetState = resulting.fleet.state.kind;
@@ -766,8 +787,9 @@ export function executeAuthorizedDockOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'dock', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'dock', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedUnloadOnce(
@@ -776,8 +798,9 @@ export function executeAuthorizedUnloadOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'unload', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'unload', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedLoadOnce(
@@ -786,8 +809,9 @@ export function executeAuthorizedLoadOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'load', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'load', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedUndockOnce(
@@ -796,8 +820,9 @@ export function executeAuthorizedUndockOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'undock', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'undock', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedStartMiningOnce(
@@ -806,8 +831,9 @@ export function executeAuthorizedStartMiningOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'start-mining', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'start-mining', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedStopMiningOnce(
@@ -816,8 +842,9 @@ export function executeAuthorizedStopMiningOnce(
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'stop-mining', onProgress, fleetName, fleetAddress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'stop-mining', onProgress, fleetName, fleetAddress, scope);
 }
 
 function countShips(snapshot: unknown): number {
@@ -843,7 +870,7 @@ export async function loadC4Fleets(settings: AppSettings): Promise<{
     const fleets = await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' });
     const miningFleet = fleets.find((fleet) => fleet.name === 'MF-01');
     if (!miningFleet) throw new Error('Fleet MF-01 was not found');
-    const copperLoop = await buildCopperLoopPreview(sage, miningFleet);
+    const copperLoop = await buildMiningLoopPreview(sage, miningFleet);
     const chainSlot = await rpc.getSlot({ commitment: 'confirmed' }).send();
     const updatedAt = new Date().toISOString();
     return {

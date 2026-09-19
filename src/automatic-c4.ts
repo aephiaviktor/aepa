@@ -9,6 +9,7 @@ import {
   PLAN_STAGE_MARKER,
   type AuthorizedLiveAction,
   type LiveCopperStepResult,
+  type MiningLoopScope,
 } from './c4.js';
 import type { AppSettings } from './settings.js';
 
@@ -47,7 +48,7 @@ export type AutomaticCopperStepResult = {
 };
 
 type ProgressCallback = (stage: string, details?: Readonly<Record<string, string>>) => void;
-type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback, fleetName?: string, fleetAddress?: string) => Promise<LiveCopperStepResult>;
+type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback, fleetName?: string, fleetAddress?: string, scope?: MiningLoopScope) => Promise<LiveCopperStepResult>;
 
 const ACTION_EXECUTORS: Readonly<Record<AuthorizedLiveAction, ActionExecutor>> = {
   dock: executeAuthorizedDockOnce,
@@ -69,8 +70,9 @@ export async function executeNextCopperStepOnce(
   onProgress?: ProgressCallback,
   fleetName = 'MF-01',
   fleetAddress?: string,
+  scope?: MiningLoopScope,
 ): Promise<AutomaticCopperStepResult> {
-  const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
+  const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
   if (inspection.decision.kind === 'wait') {
     return {
       kind: 'waiting',
@@ -87,7 +89,7 @@ export async function executeNextCopperStepOnce(
     action,
     ...(targetStop === undefined ? {} : { targetStopAtUnixSeconds: targetStop.toString() }),
   });
-  const result = await ACTION_EXECUTORS[action](settings, secretKey, onProgress, fleetName, fleetAddress);
+  const result = await ACTION_EXECUTORS[action](settings, secretKey, onProgress, fleetName, fleetAddress, scope);
   return {
     kind: 'confirmed',
     action,

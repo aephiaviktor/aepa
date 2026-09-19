@@ -15,12 +15,12 @@ export interface SavedAutomationAssignment {
   fleetName: string;
   assignment: 'mining';
   homeSystemAddress: string;
-  homeSystemId: 10;
-  homeSystemName: 'Eternity';
-  resourceId: 311;
-  resourceName: 'Copper Ore';
+  homeSystemId: number;
+  homeSystemName: string;
+  resourceId: number;
+  resourceName: string;
   destinationAddress: string;
-  destinationName: 'Ioki';
+  destinationName: string;
   travelMode: 'auto';
 }
 
@@ -38,7 +38,6 @@ export function assertAutomationCanEnable(assignment: AutomationRuntimeGate): vo
 }
 
 export function assertAutomationCanReplace(assignment?: AutomationRuntimeGate): void {
-  if (assignment?.enabled || assignment?.status === 'running') throw new Error('Pause Automation before changing its assignment');
   if (assignment?.status === 'paused') {
     throw new Error('A runner-paused assignment requires out-of-band chain-state reconciliation before it can be replaced');
   }
@@ -51,27 +50,27 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   if (!fleet) throw new Error('Select a fleet from the current C4 catalog');
   if (input.assignment !== 'mining') throw new Error('Automatic execution currently supports only Mining');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
-  if (!home || home.systemId !== 10 || home.systemName !== 'Eternity') throw new Error('Automatic execution currently supports only the Eternity Home Starbase');
-  if (input.resourceId !== 311 || catalog.resources.find((resource) => resource.id === input.resourceId)?.name !== 'Copper Ore') {
-    throw new Error('Automatic execution currently supports only Copper Ore');
-  }
+  if (!home) throw new Error('Select a Home Starbase owned by the configured Character');
+  const resource = catalog.resources.find((candidate) => candidate.id === input.resourceId);
+  if (!resource) throw new Error('Select a resource from the current C4 catalog');
   const destination = catalog.destinations.find((candidate) => candidate.address === input.destinationAddress);
-  if (!destination || destination.name !== 'Ioki' || destination.systemAddress !== home.systemAddress || !destination.resourceIds.includes(311)) {
-    throw new Error('Automatic execution currently supports only the Ioki asteroid belt in Eternity');
+  if (!destination || !destination.resourceIds.includes(resource.id)) throw new Error(`${resource.name} is not available at the selected mining destination`);
+  if (destination.systemAddress !== home.systemAddress) {
+    throw new Error('Automatic cross-system travel is not available yet; select a mining destination in the Home Starbase system');
   }
-  if (input.travelMode !== 'auto') throw new Error('The current Ioki assignment is same-system and does not support a travel mode');
+  if (input.travelMode !== 'auto') throw new Error('Same-system mining does not use a travel mode');
   return {
     profile,
     fleetAddress: fleet.address,
     fleetName: fleet.name,
     assignment: 'mining',
     homeSystemAddress: home.systemAddress,
-    homeSystemId: 10,
-    homeSystemName: 'Eternity',
-    resourceId: 311,
-    resourceName: 'Copper Ore',
+    homeSystemId: home.systemId,
+    homeSystemName: home.systemName,
+    resourceId: resource.id,
+    resourceName: resource.name,
     destinationAddress: destination.address,
-    destinationName: 'Ioki',
+    destinationName: destination.name,
     travelMode: 'auto',
   };
 }

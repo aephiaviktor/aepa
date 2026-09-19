@@ -56,6 +56,7 @@ export interface AutomationAssignmentRecord extends SavedAutomationAssignment {
   lastAction?: string;
   lastError?: string;
   updatedAt: string;
+  pendingAssignment?: SavedAutomationAssignment;
 }
 
 export interface AutomationActivityRecord {
@@ -180,6 +181,14 @@ export class AepaDatabase {
           fleet_address = (SELECT fleet_address FROM automation_assignment LIMIT 1),
           fleet_name = (SELECT fleet_name FROM automation_assignment LIMIT 1);
         INSERT INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'));
+        COMMIT;
+      `);
+    }
+    if (version < 5) {
+      this.db.exec(`
+        BEGIN;
+        ALTER TABLE automation_assignment ADD COLUMN pending_json TEXT;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (5, datetime('now'));
         COMMIT;
       `);
     }
@@ -395,8 +404,9 @@ export class AepaDatabase {
         resource_name=excluded.resource_name, destination_address=excluded.destination_address,
         destination_name=excluded.destination_name, travel_mode=excluded.travel_mode,
         enabled=0, status='disabled', target_stop_at_unix_seconds=NULL,
-        last_action=NULL, last_error=NULL, updated_at=excluded.updated_at
+        last_action=NULL, last_error=NULL, pending_json=NULL, updated_at=excluded.updated_at
     `);
+    const queue = this.db.prepare('UPDATE automation_assignment SET pending_json = ?, updated_at = ? WHERE fleet_address = ?');
     this.db.exec('BEGIN');
     try {
       for (const existing of current.values()) if (!selected.has(existing.fleetAddress)) {
@@ -405,7 +415,14 @@ export class AepaDatabase {
       for (const value of values) {
         const existing = current.get(value.fleetAddress);
         const unchanged = existing && Object.entries(value).every(([key, field]) => existing[key as keyof SavedAutomationAssignment] === field);
-        if (unchanged) continue;
+        if (unchanged) {
+          if (existing.pendingAssignment) queue.run(null, now, value.fleetAddress);
+          continue;
+        }
+        if (existing && (existing.enabled || existing.status === 'paused')) {
+          queue.run(JSON.stringify(value), now, value.fleetAddress);
+          continue;
+        }
         insert.run(value.profile, value.fleetAddress, value.fleetName, value.assignment, value.homeSystemAddress,
           value.homeSystemId, value.homeSystemName, value.resourceId, value.resourceName,
           value.destinationAddress, value.destinationName, value.travelMode, now);
@@ -418,9 +435,9 @@ export class AepaDatabase {
     return this.listAutomationAssignments();
   }
 
-  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds'> & { enabled: number; targetStopAtUnixSeconds: string | null }): AutomationAssignmentRecord {
-    const { targetStopAtUnixSeconds, ...rest } = row;
-    return { ...rest, enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }) };
+  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null }): AutomationAssignmentRecord {
+    const { targetStopAtUnixSeconds, pendingJson, ...rest } = row;
+    return { ...rest, enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }) };
   }
 
   listAutomationAssignments(): AutomationAssignmentRecord[] {
@@ -431,9 +448,10 @@ export class AepaDatabase {
              destination_address AS destinationAddress, destination_name AS destinationName,
              travel_mode AS travelMode, enabled, status,
              target_stop_at_unix_seconds AS targetStopAtUnixSeconds,
-             last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt
+             last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt,
+             pending_json AS pendingJson
       FROM automation_assignment ORDER BY fleet_name COLLATE NOCASE, fleet_address
-    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds'> & { enabled: number; targetStopAtUnixSeconds: string | null }>;
+    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null }>;
     return rows.map((row) => this.mapAutomationAssignment(row));
   }
 
@@ -441,6 +459,22 @@ export class AepaDatabase {
     return fleetAddress
       ? this.listAutomationAssignments().find((assignment) => assignment.fleetAddress === fleetAddress)
       : this.listAutomationAssignments()[0];
+  }
+
+  applyPendingAutomationAssignment(fleetAddress: string): AutomationAssignmentRecord {
+    const current = this.getAutomationAssignment(fleetAddress);
+    if (!current?.pendingAssignment) throw new Error('No pending Automation assignment exists for this fleet');
+    const value = current.pendingAssignment;
+    const result = this.db.prepare(`UPDATE automation_assignment SET
+      profile=?, fleet_name=?, assignment=?, home_system_address=?, home_system_id=?, home_system_name=?,
+      resource_id=?, resource_name=?, destination_address=?, destination_name=?, travel_mode=?,
+      pending_json=NULL, last_action=NULL, last_error=NULL, updated_at=? WHERE fleet_address=?`).run(
+      value.profile, value.fleetName, value.assignment, value.homeSystemAddress, value.homeSystemId,
+      value.homeSystemName, value.resourceId, value.resourceName, value.destinationAddress,
+      value.destinationName, value.travelMode, new Date().toISOString(), fleetAddress,
+    );
+    if (result.changes !== 1) throw new Error('Automation assignment disappeared while applying its pending update');
+    return this.getAutomationAssignment(fleetAddress)!;
   }
 
   setAutomationEnabled(enabled: boolean, fleetAddress?: string): AutomationAssignmentRecord {

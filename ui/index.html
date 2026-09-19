@@ -51,13 +51,17 @@
         <div class="panel-title config-header"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Fleet Assignment</h3></div><div class="config-actions"><button id="cancel-assignment" class="secondary" type="button">Cancel</button><button id="save-assignment" class="primary" type="button">Save</button></div></div>
         <div id="automation-empty" class="empty route-empty">Reconnecting… waiting for the first on-chain sync.</div>
         <form id="automation-config" class="automation-config" hidden>
+          <div class="assignment-columns compact-field-grid" aria-hidden="true">
+            <span>Fleet</span><span>Assignment</span><span>Home Starbase</span><span>Resource</span>
+            <span>Mining Destination<small>Region | System | Asteroid belt | Distance</small></span><span>Travel</span><span></span>
+          </div>
           <div id="automation-rows"></div>
           <div class="add-fleet-wrap"><button id="add-fleet" class="secondary" type="button">+ Add Fleet</button></div>
+          <section id="automation-issues" class="automation-issues" aria-label="Fleet Log">
+            <div class="fleet-log-head"><div><p class="eyebrow">AUTOMATION ACTIVITY</p><h3>Fleet Log</h3></div><span id="fleet-log-summary">No issues</span></div>
+            <div id="automation-issue-list" class="automation-issue-list"></div>
+          </section>
         </form>
-      </section>
-      <section id="automation-issues" class="panel automation-issues" hidden>
-        <div class="panel-title"><div><p class="eyebrow">ATTENTION REQUIRED</p><h3>Fleet Issues</h3></div></div>
-        <div id="automation-issue-list" class="automation-issue-list"></div>
       </section>
       </section>
     </main>

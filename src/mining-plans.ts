@@ -57,10 +57,12 @@ function instruction(accounts: AccountMeta[], data: ReadonlyUint8Array): Instruc
   return Object.freeze({ programAddress: SAGE_ADDRESS, accounts: Object.freeze(accounts), data });
 }
 
-export function planStartMiningCopper(input: StartMiningPlanInput): Plan {
+export function planStartMiningResource(input: StartMiningPlanInput): Plan {
   validateAuthorization(input.authorization);
   const resources = [...input.resourceIds];
-  if (resources.length !== 1 || resources[0] !== 311) throw new RangeError('The first AEPA mining loop permits only Copper Ore cargo id 311');
+  if (resources.length !== 1 || !Number.isSafeInteger(resources[0]) || resources[0] < 0 || resources[0] > 65_535) {
+    throw new RangeError('AEPA mining requires exactly one valid cargo resource id');
+  }
   const ix = instruction([
     readonlySigner(input.authorization.authority),
     writable(input.authorization.profile),

@@ -80,6 +80,28 @@ test('persists a wait deadline without sending a transaction', async () => {
   database.close();
 });
 
+test('round-robins every enabled fleet assignment instead of starving later fleets', async () => {
+  const database = new AepaDatabase(':memory:');
+  const base = {
+    profile: 'profile-1', assignment: 'mining' as const, homeSystemAddress: 'eternity', homeSystemId: 10,
+    homeSystemName: 'Eternity', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto' as const,
+  };
+  database.saveAutomationAssignments([
+    { ...base, fleetAddress: 'fleet-2', fleetName: 'MF-02', resourceId: 309, resourceName: 'Carbon' },
+    { ...base, fleetAddress: 'fleet-3', fleetName: 'MF-03', resourceId: 310, resourceName: 'Biomass' },
+    { ...base, fleetAddress: 'fleet-4', fleetName: 'MF-04', resourceId: 312, resourceName: 'Hydrogen' },
+  ]);
+  for (const fleet of ['fleet-2', 'fleet-3', 'fleet-4']) database.setAutomationEnabled(true, fleet);
+  const visited: string[] = [];
+  const runner = new AutomaticCopperRunner(database, async (assignment) => {
+    visited.push(`${assignment.fleetName}:${assignment.resourceName}`);
+    return { kind: 'waiting', untilUnixSeconds: 2_000n, detail: 'Waiting' };
+  });
+  await runner.tick(); await runner.tick(); await runner.tick();
+  assert.deepEqual(visited, ['MF-02:Carbon', 'MF-03:Biomass', 'MF-04:Hydrogen']);
+  database.close();
+});
+
 test('auto-retries plan-stage pauses but never post-submission failures', () => {
   const base: AutomationAssignmentRecord = {
     profile: 'profile-1', fleetAddress: 'fleet-mf01', fleetName: 'MF-01', assignment: 'mining',

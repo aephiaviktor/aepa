@@ -7,6 +7,8 @@ export type CopperLoopState =
 export interface CopperLoopDecisionInput {
   state: CopperLoopState;
   atEternity: boolean;
+  fleetName?: string;
+  homeSystemName?: string;
   foodRaw: bigint;
   targetFoodRaw: bigint;
   copperRaw: bigint;
@@ -36,7 +38,7 @@ export function decideCopperLoopNextStep(input: CopperLoopDecisionInput): Copper
   const quantities = [input.foodRaw, input.targetFoodRaw, input.copperRaw, input.ammoRaw, input.ammoTargetRaw, input.fuelRaw, input.fuelTargetRaw];
   if (quantities.some((value) => value < 0n)) return { kind: 'blocked', reason: 'Inventory values must not be negative.' };
   if (!input.atEternity && input.state.kind !== 'mining') {
-    return { kind: 'blocked', reason: 'MF-01 is not at the configured Eternity system.' };
+    return { kind: 'blocked', reason: `${input.fleetName ?? 'Fleet'} is not at the configured ${input.homeSystemName ?? 'Home Starbase'} system.` };
   }
 
   if (input.state.kind === 'docked') {

@@ -2,10 +2,10 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMiningAutomationCatalog } from '../src/automation-catalog.js';
-import { assertAutomationCanEnable, assertAutomationCanReplace, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
+import { assertAutomationCanEnable, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
 import { AutomaticCopperRunner, nextAutomationTickDelayMs, shouldAutoRetryPaused } from '../src/automation-runner.js';
 import { executeNextCopperStepOnce } from '../src/automatic-c4.js';
-import { getActiveC4ProfileAuthority, loadC4Fleets, simulateNextCopperStepSigned } from '../src/c4.js';
+import { getActiveC4ProfileAuthority, inspectNextCopperStep, loadC4Fleets, simulateNextCopperStepSigned, type MiningLoopScope } from '../src/c4.js';
 import { AepaDatabase } from '../src/database.js';
 import { FleetSyncCoordinator } from '../src/fleet-sync.js';
 import { CatalogSyncCoordinator } from '../src/catalog-sync.js';
@@ -125,18 +125,31 @@ app.whenReady().then(() => {
   automationRunner = new AutomaticCopperRunner(database, async (assignment) => {
     const settings = database.getSettings();
     if (assignment.profile !== settings.playerProfile) throw new Error('Saved Automation profile no longer matches Settings');
-    if (assignment.homeSystemId !== 10 || assignment.homeSystemName !== 'Eternity'
-      || assignment.resourceId !== 311 || assignment.destinationName !== 'Ioki' || assignment.travelMode !== 'auto') {
-      throw new Error('Saved assignment is outside the currently authorized Eternity Ioki Copper scope');
+    if (assignment.travelMode !== 'auto') throw new Error('Automatic execution currently supports same-system assignments only');
+    const scopeFor = (value: typeof assignment): MiningLoopScope => ({
+      homeSystemId: value.homeSystemId,
+      homeSystemName: value.homeSystemName,
+      resourceId: value.resourceId,
+      resourceName: value.resourceName,
+      destinationAddress: value.destinationAddress,
+      destinationName: value.destinationName,
+    });
+    let effective = assignment;
+    if (assignment.pendingAssignment) {
+      const inspection = await inspectNextCopperStep(settings, assignment.targetStopAtUnixSeconds, assignment.fleetName, assignment.fleetAddress, scopeFor(assignment));
+      if (inspection.decision.kind === 'start-mining') {
+        effective = database.applyPendingAutomationAssignment(assignment.fleetAddress);
+        database.recordAutomationActivity({ fleetAddress: effective.fleetAddress, fleetName: effective.fleetName, kind: 'enabled', detail: `Pending assignment activated at the serviced cycle boundary: ${effective.resourceName} at ${effective.destinationName}` });
+      }
     }
     const expectedAuthority = await getActiveC4ProfileAuthority(settings);
     return withStoredSigner(signerPath, safeStorage, async (secretKey, publicKey) => {
       if (publicKey !== expectedAuthority) throw new Error('Stored signer no longer matches the active C4 authority');
-      return executeNextCopperStepOnce(settings, secretKey, assignment.targetStopAtUnixSeconds, (stage, details) => {
+      return executeNextCopperStepOnce(settings, secretKey, effective.targetStopAtUnixSeconds, (stage, details) => {
         if (stage === 'automatic-action-selected' && details?.action === 'start-mining' && details.targetStopAtUnixSeconds) {
-          database.setAutomationTargetStop(BigInt(details.targetStopAtUnixSeconds), assignment.fleetAddress);
+          database.setAutomationTargetStop(BigInt(details.targetStopAtUnixSeconds), effective.fleetAddress);
         }
-      }, assignment.fleetName, assignment.fleetAddress);
+      }, effective.fleetName, effective.fleetAddress, scopeFor(effective));
     });
   });
   ipcMain.handle('bootstrap', async () => ({ version: app.getVersion(), network: C4_NETWORK, signer: await getAuthorizedSignerStatus(signerPath) }));
@@ -169,39 +182,50 @@ app.whenReady().then(() => {
   ipcMain.handle('automation:catalog', async () => (await catalogSync.resolve()).value);
   ipcMain.handle('automation:state', () => automationState());
   ipcMain.handle('automation:save', async (_event, value) => {
-    const settings = database.getSettings();
-    const catalog = await loadMiningAutomationCatalog(settings);
-    if (!Array.isArray(value) || value.length === 0) throw new Error('Save at least one fleet assignment');
-    const validated = value.map((draft) => validateSupportedAutomationAssignment(draft, catalog, settings.playerProfile));
-    const previous = database.listAutomationAssignments();
-    for (const assignment of previous) {
-      const replacement = validated.find((candidate) => candidate.fleetAddress === assignment.fleetAddress);
-      const changed = !replacement || Object.entries(replacement).some(([key, field]) => assignment[key as keyof typeof replacement] !== field);
-      if (changed) assertAutomationCanReplace(assignment);
-    }
-    const assignments = database.saveAutomationAssignments(validated);
-    // Saving a fleet assignment automatically enables live execution. There is
-    // no separate "enable automatic send" step; the runner starts on save.
     try {
-      const signer = await getAuthorizedSignerStatus(signerPath);
-      if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
-      for (const assignment of assignments) {
-        if (assignment.enabled && assignment.status === 'running') continue;
-        if (assignment.status === 'paused') continue;
-        assertAutomationCanEnable(assignment);
-        if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
-        database.setAutomationEnabled(true, assignment.fleetAddress);
-        database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'enabled', detail: 'Assignment saved and live execution enabled automatically' });
+      const settings = database.getSettings();
+      const catalog = await loadMiningAutomationCatalog(settings);
+      if (!Array.isArray(value) || value.length === 0) throw new Error('Save at least one fleet assignment');
+      const validated = value.map((draft) => validateSupportedAutomationAssignment(draft, catalog, settings.playerProfile));
+      const previous = database.listAutomationAssignments();
+      for (const assignment of previous) {
+        const replacement = validated.find((candidate) => candidate.fleetAddress === assignment.fleetAddress);
+        if (!replacement && (assignment.enabled || assignment.status === 'paused')) {
+          throw new Error(`Fleet ${assignment.fleetName} is active or paused and cannot be removed; keep its row or disable it after reconciliation`);
+        }
       }
-      scheduleAutomationTick(0);
+      const assignments = database.saveAutomationAssignments(validated);
+      for (const assignment of assignments.filter((candidate) => candidate.pendingAssignment)) {
+        database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'enabled', detail: `Assignment update queued for the next serviced cycle boundary: ${assignment.pendingAssignment!.resourceName} at ${assignment.pendingAssignment!.destinationName}` });
+      }
+      // Saving a new fleet assignment automatically enables live execution.
+      // Updates to a running fleet stay pending until its current cycle has
+      // stopped, docked, unloaded, and refilled safely.
+      try {
+        const signer = await getAuthorizedSignerStatus(signerPath);
+        if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
+        for (const assignment of assignments) {
+          if (assignment.enabled && assignment.status === 'running') continue;
+          if (assignment.status === 'paused') continue;
+          assertAutomationCanEnable(assignment);
+          if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
+          database.setAutomationEnabled(true, assignment.fleetAddress);
+          database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'enabled', detail: 'Assignment saved and live execution enabled automatically' });
+        }
+        scheduleAutomationTick(0);
+      } catch (error) {
+        const detail = `Assignment saved but not enabled: ${String((error as Error)?.message ?? error)}`;
+        for (const assignment of database.listAutomationAssignments().filter((candidate) => !candidate.enabled && candidate.status !== 'paused')) {
+          database.setAutomationBlocked(detail, assignment.fleetAddress);
+          database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', detail });
+        }
+      }
+      return automationState();
     } catch (error) {
-      const detail = `Assignment saved but not enabled: ${String((error as Error)?.message ?? error)}`;
-      for (const assignment of database.listAutomationAssignments().filter((candidate) => !candidate.enabled && candidate.status !== 'paused')) {
-        database.setAutomationBlocked(detail, assignment.fleetAddress);
-        database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', detail });
-      }
+      const detail = `Save blocked — ${String((error as Error)?.message ?? error)}`;
+      database.recordAutomationActivity({ kind: 'disabled', detail });
+      throw error;
     }
-    return automationState();
   });
   ipcMain.handle('automation:set-enabled', async (_event, enabled) => {
     if (typeof enabled !== 'boolean') throw new Error('Automation enabled state must be boolean');

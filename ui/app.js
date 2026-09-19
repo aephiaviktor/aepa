@@ -205,9 +205,11 @@ function renderStatusPanel() {
 
 function savedDrafts() {
   const assignments = automationRuntime?.assignments ?? (automationRuntime?.assignment ? [automationRuntime.assignment] : []);
-  return assignments.map(({ fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode }) => ({
-    fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode,
-  }));
+  return assignments.map((record) => {
+    const value = record.pendingAssignment || record;
+    const { fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode } = value;
+    return { fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode };
+  });
 }
 
 function readAutomationDrafts() {
@@ -293,7 +295,7 @@ function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   const draft = readAutomationRow(row);
   const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === draft.homeSystemAddress);
   const destinations = home && Number.isSafeInteger(draft.resourceId)
-    ? rankMiningDestinations({ faction: automationCatalog.faction, resourceId: draft.resourceId, home: home.coordinates, destinations: automationCatalog.destinations })
+    ? rankMiningDestinations({ faction: automationCatalog.faction, resourceId: draft.resourceId, home: home.coordinates, destinations: automationCatalog.destinations }).filter((value) => value.distance === 0)
     : [];
   const destination = row.querySelector('[data-field="destination"]');
   replaceSelectOptions(destination, destinations.map((value) => ({ value: value.address, label: value.label })), preferredDestination);
@@ -311,12 +313,12 @@ function createAutomationRow(draft = {}) {
   const row = document.createElement('div');
   row.className = 'automation-fleet-row';
   row.innerHTML = `<div class="field-grid compact-field-grid">
-    <label>Fleet<select data-field="fleet"></select></label>
-    <label>Assignment<select data-field="assignment"><option value="mining">Mining</option></select></label>
-    <label>Home Starbase<select data-field="home"></select></label>
-    <label>Resource<select data-field="resource"></select></label>
-    <label class="destination-field">Mining Destination<small>Region | System | Asteroid belt | Distance</small><select data-field="destination"></select></label>
-    <label>Travel<select data-field="travel"><option value="auto">Auto</option><option value="warp">Warp</option><option value="subwarp">Subwarp</option></select></label>
+    <select data-field="fleet" aria-label="Fleet"></select>
+    <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option></select>
+    <select data-field="home" aria-label="Home Starbase"></select>
+    <select data-field="resource" aria-label="Resource"></select>
+    <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
+    <select data-field="travel" aria-label="Travel"><option value="auto">Auto</option></select>
     <button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button>
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
@@ -334,11 +336,7 @@ function createAutomationRow(draft = {}) {
   };
   refreshAutomationRow(row, draft.destinationAddress, draft.travelMode);
   const persisted = (automationRuntime?.assignments ?? []).find((assignment) => assignment.fleetAddress === fleet.value);
-  if (persisted?.enabled || persisted?.status === 'paused') {
-    for (const select of row.querySelectorAll('select')) select.disabled = true;
-    row.querySelector('.remove-fleet').disabled = true;
-    row.classList.add('locked');
-  }
+  if (persisted?.pendingAssignment) row.classList.add('pending');
   return row;
 }
 
@@ -356,13 +354,19 @@ function renderAutomationRows(drafts) {
 
 function renderAutomationIssues(state) {
   const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
-  const issues = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
-  $('automation-issues').hidden = issues.length === 0;
-  $('automation-issue-list').replaceChildren(...issues.map((assignment) => {
+  const errors = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
+  const activity = state?.activity ?? [];
+  $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
+  const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
+  $('automation-issue-list').replaceChildren(...entries.map((entry) => {
     const item = document.createElement('div');
-    item.className = 'automation-issue';
-    const name = document.createElement('strong'); name.textContent = assignment.fleetName;
-    const detail = document.createElement('span'); detail.textContent = assignment.lastError || `Automation is ${assignment.status}`;
+    const isError = entry.kind === 'paused' || entry.kind === 'disabled' || /blocked|error|failed/i.test(entry.detail);
+    item.className = `automation-issue${isError ? ' error' : ''}`;
+    const name = document.createElement('strong');
+    name.textContent = entry.fleetName || 'System';
+    const detail = document.createElement('span');
+    const time = entry.occurredAt ? new Date(entry.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+    detail.textContent = `${time} · ${entry.action || entry.kind} · ${entry.detail}`;
     item.append(name, detail);
     return item;
   }));
@@ -515,11 +519,11 @@ $('save-assignment').onclick = async () => {
     renderAutomationState(state);
     renderAutomationRows(savedDrafts());
   } catch (error) {
-    $('automation-issues').hidden = false;
+    try { renderAutomationState(await window.aepa.getAutomationState()); } catch {}
     const item = document.createElement('div');
-    item.className = 'automation-issue';
+    item.className = 'automation-issue error';
     item.textContent = `Save blocked — ${error.message || String(error)}`;
-    $('automation-issue-list').replaceChildren(item);
+    $('automation-issue-list').prepend(item);
   } finally {
     updateAssignmentControls();
   }

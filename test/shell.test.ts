@@ -73,7 +73,10 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   for (const field of ['fleet', 'assignment', 'home', 'resource', 'destination', 'travel']) {
     assert.match(script, new RegExp(`data-field=\\"${field}\\"`));
   }
-  assert.match(script, /Region \| System \| Asteroid belt \| Distance/);
+  assert.match(html, /Region \| System \| Asteroid belt \| Distance/);
+  assert.match(html, /class="assignment-columns compact-field-grid"/);
+  assert.match(html, /<h3>Fleet Log<\/h3>/);
+  assert.ok(html.indexOf('id="add-fleet"') < html.indexOf('id="automation-issues"'), 'Fleet Log must be below Add Fleet inside Fleet Assignment');
   assert.match(html, /config-header/);
   assert.match(html, /Fleet Assignment/);
   assert.doesNotMatch(html, /Mining Configuration/);
@@ -92,7 +95,9 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   assert.match(script, /renderStatusPanel/);
   assert.match(script, /className = 'automation-fleet-row'/);
   assert.match(script, /class=\"field-grid compact-field-grid\"/);
-  assert.doesNotMatch(html, /configuration-summary|automation-activity/);
+  assert.doesNotMatch(html, /configuration-summary/);
+  assert.doesNotMatch(script, /<label>Fleet<select|<label>Assignment<select/);
+  assert.doesNotMatch(script, /select\.disabled = true/);
 
   const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
   assert.match(styles, /--cyan:/);

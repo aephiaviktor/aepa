@@ -4,6 +4,8 @@ import { decideCopperLoopNextStep } from '../src/copper-loop.js';
 
 const ready = {
   atEternity: true,
+  fleetName: 'MF-01',
+  homeSystemName: 'Eternity',
   foodRaw: 13n,
   targetFoodRaw: 13n,
   copperRaw: 0n,

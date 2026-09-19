@@ -122,6 +122,30 @@ test('SQLite persists independent runtime state for multiple fleet assignments',
   database.close();
 });
 
+test('SQLite queues edits to a running assignment and applies them without losing runtime state', () => {
+  const database = new AepaDatabase(':memory:');
+  const copper = {
+    profile: 'profile-1', fleetAddress: 'fleet-mf01', fleetName: 'MF-01', assignment: 'mining' as const,
+    homeSystemAddress: 'eternity', homeSystemId: 10, homeSystemName: 'Eternity', resourceId: 311,
+    resourceName: 'Copper Ore', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto' as const,
+  };
+  database.saveAutomationAssignment(copper);
+  database.setAutomationEnabled(true, copper.fleetAddress);
+  database.setAutomationTargetStop(2_000n, copper.fleetAddress);
+  database.saveAutomationAssignment({ ...copper, resourceId: 329, resourceName: 'Carbon' });
+  const queued = database.getAutomationAssignment(copper.fleetAddress)!;
+  assert.equal(queued.resourceName, 'Copper Ore');
+  assert.equal(queued.pendingAssignment?.resourceName, 'Carbon');
+  assert.equal(queued.targetStopAtUnixSeconds, 2_000n);
+  assert.equal(queued.status, 'running');
+  const applied = database.applyPendingAutomationAssignment(copper.fleetAddress);
+  assert.equal(applied.resourceName, 'Carbon');
+  assert.equal(applied.pendingAssignment, undefined);
+  assert.equal(applied.targetStopAtUnixSeconds, 2_000n);
+  assert.equal(applied.status, 'running');
+  database.close();
+});
+
 test('SQLite persists catalog sync metadata and keeps the last-good catalog across failures', () => {
   const database = new AepaDatabase(':memory:');
   const scope = 'profile-1';
