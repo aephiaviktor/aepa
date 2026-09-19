@@ -48,7 +48,7 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   if (!value || typeof value !== 'object') throw new Error('Automation assignment must be an object');
   const input = value as Partial<AutomationAssignmentInput>;
   const fleet = catalog.fleets.find((candidate) => candidate.address === input.fleetAddress);
-  if (!fleet || fleet.name !== 'MF-01') throw new Error('Automatic execution currently supports only MF-01');
+  if (!fleet) throw new Error('Select a fleet from the current C4 catalog');
   if (input.assignment !== 'mining') throw new Error('Automatic execution currently supports only Mining');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
   if (!home || home.systemId !== 10 || home.systemName !== 'Eternity') throw new Error('Automatic execution currently supports only the Eternity Home Starbase');
@@ -63,7 +63,7 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   return {
     profile,
     fleetAddress: fleet.address,
-    fleetName: 'MF-01',
+    fleetName: fleet.name,
     assignment: 'mining',
     homeSystemAddress: home.systemAddress,
     homeSystemId: 10,

@@ -51,19 +51,13 @@
         <div class="panel-title config-header"><div><p class="eyebrow">AUTOMATION ASSIGNMENT</p><h3>Fleet Assignment</h3></div><div class="config-actions"><button id="cancel-assignment" class="secondary" type="button">Cancel</button><button id="save-assignment" class="primary" type="button">Save</button></div></div>
         <div id="automation-empty" class="empty route-empty">Reconnecting… waiting for the first on-chain sync.</div>
         <form id="automation-config" class="automation-config" hidden>
-          <div class="automation-fleet-row">
-            <div class="field-grid compact-field-grid">
-              <label>Fleet<select id="automation-fleet"></select></label>
-              <label>Assignment<select id="automation-assignment"><option value="mining">Mining</option></select></label>
-              <label>Home Starbase<select id="automation-home"></select></label>
-              <label>Resource<select id="automation-resource"></select></label>
-              <label class="destination-field">Mining Destination<small>Region | System | Asteroid belt | Distance</small><select id="automation-destination"></select></label>
-              <label>Travel<select id="automation-travel"><option value="auto">Auto</option><option value="warp">Warp</option><option value="subwarp">Subwarp</option></select></label>
-            </div>
-          </div>
-          <div class="configuration-summary"><div><strong id="configuration-route">Select a complete assignment</strong><span id="configuration-detail">Save persists the assignment and enables live execution of the proven MF-01 / Eternity / Ioki / Copper loop immediately.</span></div></div>
-          <div id="automation-activity" class="automation-activity">No automatic activity recorded.</div>
+          <div id="automation-rows"></div>
+          <div class="add-fleet-wrap"><button id="add-fleet" class="secondary" type="button">+ Add Fleet</button></div>
         </form>
+      </section>
+      <section id="automation-issues" class="panel automation-issues" hidden>
+        <div class="panel-title"><div><p class="eyebrow">ATTENTION REQUIRED</p><h3>Fleet Issues</h3></div></div>
+        <div id="automation-issue-list" class="automation-issue-list"></div>
       </section>
       </section>
     </main>

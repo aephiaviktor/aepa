@@ -65,6 +65,8 @@ export interface AutomationActivityRecord {
   action?: string;
   signature?: string;
   detail: string;
+  fleetAddress?: string;
+  fleetName?: string;
 }
 
 export class AepaDatabase {
@@ -147,6 +149,37 @@ export class AepaDatabase {
           PRIMARY KEY(dataset, scope)
         );
         INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'));
+        COMMIT;
+      `);
+    }
+    if (version < 4) {
+      this.db.exec(`
+        BEGIN;
+        ALTER TABLE automation_assignment RENAME TO automation_assignment_single;
+        CREATE TABLE automation_assignment (
+          profile TEXT NOT NULL, fleet_address TEXT PRIMARY KEY, fleet_name TEXT NOT NULL,
+          assignment TEXT NOT NULL, home_system_address TEXT NOT NULL, home_system_id INTEGER NOT NULL,
+          home_system_name TEXT NOT NULL, resource_id INTEGER NOT NULL, resource_name TEXT NOT NULL,
+          destination_address TEXT NOT NULL, destination_name TEXT NOT NULL, travel_mode TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+          status TEXT NOT NULL DEFAULT 'disabled' CHECK (status IN ('disabled', 'running', 'paused')),
+          target_stop_at_unix_seconds TEXT, last_action TEXT, last_error TEXT, updated_at TEXT NOT NULL
+        );
+        INSERT INTO automation_assignment(
+          profile, fleet_address, fleet_name, assignment, home_system_address, home_system_id,
+          home_system_name, resource_id, resource_name, destination_address, destination_name,
+          travel_mode, enabled, status, target_stop_at_unix_seconds, last_action, last_error, updated_at
+        ) SELECT profile, fleet_address, fleet_name, assignment, home_system_address, home_system_id,
+          home_system_name, resource_id, resource_name, destination_address, destination_name,
+          travel_mode, enabled, status, target_stop_at_unix_seconds, last_action, last_error, updated_at
+          FROM automation_assignment_single;
+        DROP TABLE automation_assignment_single;
+        ALTER TABLE automation_activity ADD COLUMN fleet_address TEXT;
+        ALTER TABLE automation_activity ADD COLUMN fleet_name TEXT;
+        UPDATE automation_activity SET
+          fleet_address = (SELECT fleet_address FROM automation_assignment LIMIT 1),
+          fleet_name = (SELECT fleet_name FROM automation_assignment LIMIT 1);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'));
         COMMIT;
       `);
     }
@@ -340,31 +373,58 @@ export class AepaDatabase {
   }
 
   saveAutomationAssignment(value: SavedAutomationAssignment): AutomationAssignmentRecord {
-    const now = new Date().toISOString();
-    this.db.prepare(`
-      INSERT INTO automation_assignment(
-        id, profile, fleet_address, fleet_name, assignment, home_system_address, home_system_id,
-        home_system_name, resource_id, resource_name, destination_address, destination_name,
-        travel_mode, enabled, status, target_stop_at_unix_seconds, last_action, last_error, updated_at
-      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'disabled', NULL, NULL, NULL, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        profile=excluded.profile, fleet_address=excluded.fleet_address, fleet_name=excluded.fleet_name,
-        assignment=excluded.assignment, home_system_address=excluded.home_system_address,
-        home_system_id=excluded.home_system_id, home_system_name=excluded.home_system_name,
-        resource_id=excluded.resource_id, resource_name=excluded.resource_name,
-        destination_address=excluded.destination_address, destination_name=excluded.destination_name,
-        travel_mode=excluded.travel_mode, enabled=0, status='disabled',
-        target_stop_at_unix_seconds=NULL, last_action=NULL, last_error=NULL, updated_at=excluded.updated_at
-    `).run(
-      value.profile, value.fleetAddress, value.fleetName, value.assignment, value.homeSystemAddress,
-      value.homeSystemId, value.homeSystemName, value.resourceId, value.resourceName,
-      value.destinationAddress, value.destinationName, value.travelMode, now,
-    );
-    return this.getAutomationAssignment()!;
+    return this.saveAutomationAssignments([value])[0]!;
   }
 
-  getAutomationAssignment(): AutomationAssignmentRecord | undefined {
-    const row = this.db.prepare(`
+  saveAutomationAssignments(values: readonly SavedAutomationAssignment[]): AutomationAssignmentRecord[] {
+    if (values.length === 0) throw new Error('Save at least one Automation assignment');
+    if (new Set(values.map((value) => value.fleetAddress)).size !== values.length) throw new Error('Each fleet can have only one Automation assignment');
+    const now = new Date().toISOString();
+    const current = new Map(this.listAutomationAssignments().map((assignment) => [assignment.fleetAddress, assignment]));
+    const selected = new Set(values.map((value) => value.fleetAddress));
+    const insert = this.db.prepare(`
+      INSERT INTO automation_assignment(
+        profile, fleet_address, fleet_name, assignment, home_system_address, home_system_id,
+        home_system_name, resource_id, resource_name, destination_address, destination_name,
+        travel_mode, enabled, status, target_stop_at_unix_seconds, last_action, last_error, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'disabled', NULL, NULL, NULL, ?)
+      ON CONFLICT(fleet_address) DO UPDATE SET
+        profile=excluded.profile, fleet_name=excluded.fleet_name, assignment=excluded.assignment,
+        home_system_address=excluded.home_system_address, home_system_id=excluded.home_system_id,
+        home_system_name=excluded.home_system_name, resource_id=excluded.resource_id,
+        resource_name=excluded.resource_name, destination_address=excluded.destination_address,
+        destination_name=excluded.destination_name, travel_mode=excluded.travel_mode,
+        enabled=0, status='disabled', target_stop_at_unix_seconds=NULL,
+        last_action=NULL, last_error=NULL, updated_at=excluded.updated_at
+    `);
+    this.db.exec('BEGIN');
+    try {
+      for (const existing of current.values()) if (!selected.has(existing.fleetAddress)) {
+        this.db.prepare('DELETE FROM automation_assignment WHERE fleet_address = ?').run(existing.fleetAddress);
+      }
+      for (const value of values) {
+        const existing = current.get(value.fleetAddress);
+        const unchanged = existing && Object.entries(value).every(([key, field]) => existing[key as keyof SavedAutomationAssignment] === field);
+        if (unchanged) continue;
+        insert.run(value.profile, value.fleetAddress, value.fleetName, value.assignment, value.homeSystemAddress,
+          value.homeSystemId, value.homeSystemName, value.resourceId, value.resourceName,
+          value.destinationAddress, value.destinationName, value.travelMode, now);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return this.listAutomationAssignments();
+  }
+
+  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds'> & { enabled: number; targetStopAtUnixSeconds: string | null }): AutomationAssignmentRecord {
+    const { targetStopAtUnixSeconds, ...rest } = row;
+    return { ...rest, enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }) };
+  }
+
+  listAutomationAssignments(): AutomationAssignmentRecord[] {
+    const rows = this.db.prepare(`
       SELECT profile, fleet_address AS fleetAddress, fleet_name AS fleetName, assignment,
              home_system_address AS homeSystemAddress, home_system_id AS homeSystemId,
              home_system_name AS homeSystemName, resource_id AS resourceId, resource_name AS resourceName,
@@ -372,50 +432,51 @@ export class AepaDatabase {
              travel_mode AS travelMode, enabled, status,
              target_stop_at_unix_seconds AS targetStopAtUnixSeconds,
              last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt
-      FROM automation_assignment WHERE id = 1
-    `).get() as (Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds'> & { enabled: number; targetStopAtUnixSeconds: string | null }) | undefined;
-    if (!row) return undefined;
-    const { targetStopAtUnixSeconds, ...rest } = row;
-    return {
-      ...rest,
-      enabled: row.enabled === 1,
-      ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }),
-    };
+      FROM automation_assignment ORDER BY fleet_name COLLATE NOCASE, fleet_address
+    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds'> & { enabled: number; targetStopAtUnixSeconds: string | null }>;
+    return rows.map((row) => this.mapAutomationAssignment(row));
   }
 
-  setAutomationEnabled(enabled: boolean): AutomationAssignmentRecord {
-    const result = this.db.prepare(`
-      UPDATE automation_assignment SET enabled = ?, status = ?, last_error = NULL, updated_at = ? WHERE id = 1
-    `).run(enabled ? 1 : 0, enabled ? 'running' : 'disabled', new Date().toISOString());
+  getAutomationAssignment(fleetAddress?: string): AutomationAssignmentRecord | undefined {
+    return fleetAddress
+      ? this.listAutomationAssignments().find((assignment) => assignment.fleetAddress === fleetAddress)
+      : this.listAutomationAssignments()[0];
+  }
+
+  setAutomationEnabled(enabled: boolean, fleetAddress?: string): AutomationAssignmentRecord {
+    const selected = fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
+    if (!selected) throw new Error('Save an Automation assignment before changing its state');
+    const result = this.db.prepare(`UPDATE automation_assignment SET enabled = ?, status = ?, last_error = NULL, updated_at = ? WHERE fleet_address = ?`)
+      .run(enabled ? 1 : 0, enabled ? 'running' : 'disabled', new Date().toISOString(), selected);
     if (result.changes !== 1) throw new Error('Save an Automation assignment before changing its state');
-    return this.getAutomationAssignment()!;
+    return this.getAutomationAssignment(selected)!;
   }
 
-  setAutomationTargetStop(value?: bigint): void {
-    this.db.prepare(`UPDATE automation_assignment SET target_stop_at_unix_seconds = ?, updated_at = ? WHERE id = 1`)
-      .run(value?.toString() ?? null, new Date().toISOString());
+  setAutomationTargetStop(value: bigint | undefined, fleetAddress?: string): void {
+    const selected = fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
+    if (!selected) return;
+    this.db.prepare(`UPDATE automation_assignment SET target_stop_at_unix_seconds = ?, updated_at = ? WHERE fleet_address = ?`)
+      .run(value?.toString() ?? null, new Date().toISOString(), selected);
   }
 
-  setAutomationLastAction(action: string): void {
-    this.db.prepare(`UPDATE automation_assignment SET last_action = ?, updated_at = ? WHERE id = 1`)
-      .run(action, new Date().toISOString());
+  setAutomationLastAction(action: string, fleetAddress?: string): void {
+    const selected = fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
+    if (!selected) return;
+    this.db.prepare(`UPDATE automation_assignment SET last_action = ?, updated_at = ? WHERE fleet_address = ?`)
+      .run(action, new Date().toISOString(), selected);
   }
 
-  confirmAutomationAction(value: { action: string; signature: string; detail: string; targetStopAtUnixSeconds?: bigint }): void {
+  confirmAutomationAction(value: { fleetAddress?: string; fleetName?: string; action: string; signature: string; detail: string; targetStopAtUnixSeconds?: bigint }): void {
+    const selected = value.fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
+    if (!selected) throw new Error('No Automation assignment exists to confirm');
+    const assignment = this.getAutomationAssignment(selected)!;
     this.db.exec('BEGIN');
     try {
-      const targetStop = value.action === 'start-mining'
-        ? value.targetStopAtUnixSeconds?.toString()
-        : value.action === 'stop-mining' ? null : undefined;
+      const targetStop = value.action === 'start-mining' ? value.targetStopAtUnixSeconds?.toString() : value.action === 'stop-mining' ? null : undefined;
       if (value.action === 'start-mining' && targetStop === undefined) throw new Error('start-mining confirmation requires a target stop time');
-      if (targetStop === undefined) {
-        this.db.prepare(`UPDATE automation_assignment SET last_action = ?, updated_at = ? WHERE id = 1`)
-          .run(value.action, new Date().toISOString());
-      } else {
-        this.db.prepare(`UPDATE automation_assignment SET target_stop_at_unix_seconds = ?, last_action = ?, updated_at = ? WHERE id = 1`)
-          .run(targetStop, value.action, new Date().toISOString());
-      }
-      this.recordAutomationActivity({ kind: 'confirmed', action: value.action, signature: value.signature, detail: value.detail });
+      if (targetStop === undefined) this.db.prepare(`UPDATE automation_assignment SET last_action = ?, updated_at = ? WHERE fleet_address = ?`).run(value.action, new Date().toISOString(), selected);
+      else this.db.prepare(`UPDATE automation_assignment SET target_stop_at_unix_seconds = ?, last_action = ?, updated_at = ? WHERE fleet_address = ?`).run(targetStop, value.action, new Date().toISOString(), selected);
+      this.recordAutomationActivity({ fleetAddress: selected, fleetName: value.fleetName ?? assignment.fleetName, kind: 'confirmed', action: value.action, signature: value.signature, detail: value.detail });
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -423,29 +484,33 @@ export class AepaDatabase {
     }
   }
 
-  pauseAutomation(reason: string): AutomationAssignmentRecord {
-    const message = reason.slice(0, 2_000);
-    const result = this.db.prepare(`
-      UPDATE automation_assignment SET enabled = 0, status = 'paused', last_error = ?, updated_at = ? WHERE id = 1
-    `).run(message, new Date().toISOString());
+  pauseAutomation(reason: string, fleetAddress?: string): AutomationAssignmentRecord {
+    const selected = fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
+    if (!selected) throw new Error('No Automation assignment exists to pause');
+    const result = this.db.prepare(`UPDATE automation_assignment SET enabled = 0, status = 'paused', last_error = ?, updated_at = ? WHERE fleet_address = ?`)
+      .run(reason.slice(0, 2_000), new Date().toISOString(), selected);
     if (result.changes !== 1) throw new Error('No Automation assignment exists to pause');
-    return this.getAutomationAssignment()!;
+    return this.getAutomationAssignment(selected)!;
+  }
+
+  setAutomationBlocked(reason: string, fleetAddress: string): AutomationAssignmentRecord {
+    const result = this.db.prepare(`UPDATE automation_assignment SET enabled = 0, status = 'disabled', last_error = ?, updated_at = ? WHERE fleet_address = ?`)
+      .run(reason.slice(0, 2_000), new Date().toISOString(), fleetAddress);
+    if (result.changes !== 1) throw new Error('No Automation assignment exists to block');
+    return this.getAutomationAssignment(fleetAddress)!;
   }
 
   recordAutomationActivity(value: Omit<AutomationActivityRecord, 'id' | 'occurredAt'>): AutomationActivityRecord {
     const occurredAt = new Date().toISOString();
-    const result = this.db.prepare(`
-      INSERT INTO automation_activity(occurred_at, kind, action, signature, detail) VALUES (?, ?, ?, ?, ?)
-    `).run(occurredAt, value.kind, value.action ?? null, value.signature ?? null, value.detail.slice(0, 4_000));
+    const result = this.db.prepare(`INSERT INTO automation_activity(occurred_at, kind, action, signature, detail, fleet_address, fleet_name) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(occurredAt, value.kind, value.action ?? null, value.signature ?? null, value.detail.slice(0, 4_000), value.fleetAddress ?? null, value.fleetName ?? null);
     return { id: Number(result.lastInsertRowid), occurredAt, ...value };
   }
 
   listAutomationActivity(limit = 50): AutomationActivityRecord[] {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
-    return this.db.prepare(`
-      SELECT id, occurred_at AS occurredAt, kind, action, signature, detail
-      FROM automation_activity ORDER BY id DESC LIMIT ?
-    `).all(safeLimit) as unknown as AutomationActivityRecord[];
+    return this.db.prepare(`SELECT id, occurred_at AS occurredAt, kind, action, signature, detail, fleet_address AS fleetAddress, fleet_name AS fleetName FROM automation_activity ORDER BY id DESC LIMIT ?`)
+      .all(safeLimit) as unknown as AutomationActivityRecord[];
   }
 
   /** Fresh-start after a C4 reset: removes every chain-derived row (cached

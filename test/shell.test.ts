@@ -67,10 +67,13 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
   const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
   const preload = await readFile(join(process.cwd(), 'electron/preload.cjs'), 'utf8');
-  for (const id of ['automation-fleet', 'automation-assignment', 'automation-home', 'automation-resource', 'automation-destination', 'automation-travel']) {
-    assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /id="automation-rows"/);
+  assert.match(html, /id="add-fleet"/);
+  assert.match(html, /id="automation-issues"/);
+  for (const field of ['fleet', 'assignment', 'home', 'resource', 'destination', 'travel']) {
+    assert.match(script, new RegExp(`data-field=\\"${field}\\"`));
   }
-  assert.match(html, /Region \| System \| Asteroid belt \| Distance/);
+  assert.match(script, /Region \| System \| Asteroid belt \| Distance/);
   assert.match(html, /config-header/);
   assert.match(html, /Fleet Assignment/);
   assert.doesNotMatch(html, /Mining Configuration/);
@@ -87,8 +90,9 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   assert.doesNotMatch(html, /id="clear-pause"/);
   assert.match(script, /saveAutomationAssignment/);
   assert.match(script, /renderStatusPanel/);
-  assert.match(html, /class="automation-fleet-row"/);
-  assert.match(html, /class="field-grid compact-field-grid"/);
+  assert.match(script, /className = 'automation-fleet-row'/);
+  assert.match(script, /class=\"field-grid compact-field-grid\"/);
+  assert.doesNotMatch(html, /configuration-summary|automation-activity/);
 
   const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
   assert.match(styles, /--cyan:/);

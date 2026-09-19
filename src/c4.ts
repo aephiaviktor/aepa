@@ -156,7 +156,7 @@ export function calculateServiceBundleAmounts(input: {
 export type AuthorizedLiveAction = 'dock' | 'unload' | 'load' | 'undock' | 'start-mining' | 'stop-mining';
 
 export interface LiveCopperStepResult {
-  fleet: 'MF-01';
+  fleet: string;
   action: AuthorizedLiveAction;
   summary: string;
   authority: string;
@@ -172,8 +172,9 @@ export interface LiveCopperStepResult {
 export function assertAuthorizedCopperStep(
   expectedAction: AuthorizedLiveAction,
   observed: { fleet: string; action: string; authority: string },
+  expectedFleetName = 'MF-01',
 ): void {
-  if (observed.fleet !== 'MF-01') throw new Error('Authorization gate failed: fleet is not MF-01');
+  if (observed.fleet !== expectedFleetName) throw new Error(`Authorization gate failed: fleet is not ${expectedFleetName}`);
   if (observed.action !== expectedAction) throw new Error(`Authorization gate failed: fresh next action is ${observed.action}, not ${expectedAction}`);
   if (observed.authority !== '5sHs3Gjw43Csi9WN582iqoHUZrVZE8LhyJ7xqtcoQFCw') throw new Error('Authorization gate failed: active C4 authority changed');
 }
@@ -365,8 +366,10 @@ async function prepareNextCopperStep(
   settings: AppSettings,
   forcedAction?: AuthorizedLiveAction,
   targetStopAtUnixSeconds?: bigint,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ) {
-  const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds);
+  const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
   const decision = forcedAction === 'stop-mining' && observed.fleet.state.kind === 'mining'
     ? { kind: 'stop-mining' as const }
     : observed.decision;
@@ -378,6 +381,8 @@ async function observeCopperLoop(
   sage: ReturnType<typeof createSageClient>,
   settings: AppSettings,
   targetStopAtUnixSeconds?: bigint,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ) {
   const profileAddress = address(settings.playerProfile);
   const [profile, character, home] = await Promise.all([
@@ -386,8 +391,9 @@ async function observeCopperLoop(
     sage.systems.byId(ETERNITY_SYSTEM_ID, { commitment: 'confirmed', policy: 'no-store' }),
   ]);
   const fleets = await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' });
-  const fleet = fleets.find((candidate) => candidate.name === 'MF-01');
-  if (!fleet) throw new Error('Fleet MF-01 was not found');
+  const fleet = fleets.find((candidate) => fleetAddress ? String(candidate.address) === fleetAddress : candidate.name === fleetName);
+  if (!fleet) throw new Error(`Fleet ${fleetName} was not found`);
+  if (fleet.name !== fleetName) throw new Error(`Fleet identity mismatch: ${fleetAddress} is ${fleet.name}, not ${fleetName}`);
   const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
   const asteroid = asteroids.find((candidate) => candidate.name === 'Ioki');
   if (!asteroid) throw new Error('C4 asteroid Ioki was not found in Eternity');
@@ -644,7 +650,7 @@ export async function simulateNextCopperStepSigned(settings: AppSettings, secret
 }
 
 /** Reads fresh chain state without signing or sending. */
-export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint): Promise<{
+export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint, fleetName = 'MF-01', fleetAddress?: string): Promise<{
   decision: ReturnType<typeof decideCopperLoopNextStep>;
   targetMiningSeconds: bigint;
 }> {
@@ -652,7 +658,7 @@ export async function inspectNextCopperStep(settings: AppSettings, targetStopAtU
   const rpc = createSolanaRpc(settings.rpcUrl);
   const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
   try {
-    const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds);
+    const observed = await observeCopperLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
     return { decision: observed.decision, targetMiningSeconds: BigInt(observed.preview.targetMiningSeconds) };
   } finally {
     await sage.dispose();
@@ -668,17 +674,19 @@ async function executeAuthorizedCopperStepOnce(
   secretKey: Uint8Array,
   expectedAction: AuthorizedLiveAction,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
   if (!settings.playerProfile) throw new Error(`Configure a Player Profile before executing the authorized ${expectedAction}`);
   const rpc = createSolanaRpc(settings.rpcUrl);
   const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
   try {
-    const prepared = await prepareNextCopperStep(sage, settings, expectedAction);
+    const prepared = await prepareNextCopperStep(sage, settings, expectedAction, undefined, fleetName, fleetAddress);
     assertAuthorizedCopperStep(expectedAction, {
       fleet: prepared.fleet.name,
       action: prepared.decision.kind,
       authority: prepared.key.authority,
-    });
+    }, fleetName);
     onProgress?.('fresh-action-verified', { action: prepared.decision.kind, authority: prepared.key.authority, fleet: prepared.fleet.name });
 
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
@@ -716,7 +724,7 @@ async function executeAuthorizedCopperStepOnce(
       let miningFleet: Awaited<ReturnType<typeof loadC4Fleets>>['fleets'][number] | undefined;
       while (Date.now() < stateDeadline) {
         const snapshot = await loadC4Fleets(settings);
-        miningFleet = snapshot.fleets.find((fleet) => fleet.name === 'MF-01');
+        miningFleet = snapshot.fleets.find((fleet) => fleetAddress ? fleet.address === fleetAddress : fleet.name === fleetName);
         if (miningFleet?.state === 'mining') break;
         await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
@@ -724,10 +732,10 @@ async function executeAuthorizedCopperStepOnce(
       resultingFleetState = miningFleet.state;
       resultingNextStep = 'waiting';
     } else {
-      let resulting = await prepareNextCopperStep(sage, settings);
+      let resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress);
       while (resulting.decision.kind === expectedAction && Date.now() < stateDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
-        resulting = await prepareNextCopperStep(sage, settings);
+        resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress);
       }
       if (resulting.decision.kind === expectedAction) throw new Error(`${expectedAction} transaction ${submission.signature} confirmed, but the resulting fleet state was not observed within 45 seconds`);
       resultingFleetState = resulting.fleet.state.kind;
@@ -735,7 +743,7 @@ async function executeAuthorizedCopperStepOnce(
     }
 
     return {
-      fleet: 'MF-01',
+      fleet: fleetName,
       action: expectedAction,
       summary: prepared.plan.summary,
       authority: prepared.key.authority,
@@ -756,48 +764,60 @@ export function executeAuthorizedDockOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'dock', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'dock', onProgress, fleetName, fleetAddress);
 }
 
 export function executeAuthorizedUnloadOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'unload', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'unload', onProgress, fleetName, fleetAddress);
 }
 
 export function executeAuthorizedLoadOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'load', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'load', onProgress, fleetName, fleetAddress);
 }
 
 export function executeAuthorizedUndockOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'undock', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'undock', onProgress, fleetName, fleetAddress);
 }
 
 export function executeAuthorizedStartMiningOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'start-mining', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'start-mining', onProgress, fleetName, fleetAddress);
 }
 
 export function executeAuthorizedStopMiningOnce(
   settings: AppSettings,
   secretKey: Uint8Array,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<LiveCopperStepResult> {
-  return executeAuthorizedCopperStepOnce(settings, secretKey, 'stop-mining', onProgress);
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'stop-mining', onProgress, fleetName, fleetAddress);
 }
 
 function countShips(snapshot: unknown): number {

@@ -45,6 +45,7 @@ export type AutomaticTickResult =
 
 export class AutomaticCopperRunner {
   private running = false;
+  private nextFleetIndex = 0;
 
   constructor(
     private readonly database: AepaDatabase,
@@ -53,16 +54,18 @@ export class AutomaticCopperRunner {
 
   async tick(): Promise<AutomaticTickResult> {
     if (this.running) return { kind: 'busy' };
-    const assignment = this.database.getAutomationAssignment();
-    if (!assignment?.enabled || assignment.status !== 'running') return { kind: 'idle' };
+    const assignments = this.database.listAutomationAssignments().filter((assignment) => assignment.enabled && assignment.status === 'running');
+    if (assignments.length === 0) return { kind: 'idle' };
+    const assignment = assignments[this.nextFleetIndex % assignments.length]!;
+    this.nextFleetIndex = (this.nextFleetIndex + 1) % assignments.length;
     this.running = true;
     try {
       const outcome = await this.executeStep(assignment);
       if (outcome.kind === 'waiting') {
         const marker = `waiting:${outcome.untilUnixSeconds.toString()}`;
         if (assignment.lastAction !== marker) {
-          this.database.setAutomationLastAction(marker);
-          this.database.recordAutomationActivity({ kind: 'waiting', action: 'stop-mining', detail: outcome.detail });
+          this.database.setAutomationLastAction(marker, assignment.fleetAddress);
+          this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: 'stop-mining', detail: outcome.detail });
         }
         return { kind: 'waiting', untilUnixSeconds: outcome.untilUnixSeconds };
       }
@@ -70,6 +73,8 @@ export class AutomaticCopperRunner {
         throw new Error('Confirmed start-mining did not produce a durable target stop time');
       }
       this.database.confirmAutomationAction({
+        fleetAddress: assignment.fleetAddress,
+        fleetName: assignment.fleetName,
         action: outcome.action,
         signature: outcome.signature,
         detail: outcome.detail,
@@ -80,8 +85,8 @@ export class AutomaticCopperRunner {
       const detail = String((error as Error)?.message ?? error);
       const planStage = error instanceof PlannerStageError ? `${PLAN_STAGE_MARKER} ` : '';
       const reason = `${planStage}${detail}. Automation paused; chain state must be inspected before any retry.`;
-      this.database.pauseAutomation(reason);
-      this.database.recordAutomationActivity({ kind: 'paused', detail: reason });
+      this.database.pauseAutomation(reason, assignment.fleetAddress);
+      this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'paused', detail: reason });
       return { kind: 'paused', reason };
     } finally {
       this.running = false;

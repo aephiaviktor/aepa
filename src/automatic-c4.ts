@@ -47,7 +47,7 @@ export type AutomaticCopperStepResult = {
 };
 
 type ProgressCallback = (stage: string, details?: Readonly<Record<string, string>>) => void;
-type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback) => Promise<LiveCopperStepResult>;
+type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback, fleetName?: string, fleetAddress?: string) => Promise<LiveCopperStepResult>;
 
 const ACTION_EXECUTORS: Readonly<Record<AuthorizedLiveAction, ActionExecutor>> = {
   dock: executeAuthorizedDockOnce,
@@ -67,8 +67,10 @@ export async function executeNextCopperStepOnce(
   secretKey: Uint8Array,
   targetStopAtUnixSeconds?: bigint,
   onProgress?: ProgressCallback,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
 ): Promise<AutomaticCopperStepResult> {
-  const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds);
+  const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds, fleetName, fleetAddress);
   if (inspection.decision.kind === 'wait') {
     return {
       kind: 'waiting',
@@ -85,7 +87,7 @@ export async function executeNextCopperStepOnce(
     action,
     ...(targetStop === undefined ? {} : { targetStopAtUnixSeconds: targetStop.toString() }),
   });
-  const result = await ACTION_EXECUTORS[action](settings, secretKey, onProgress);
+  const result = await ACTION_EXECUTORS[action](settings, secretKey, onProgress, fleetName, fleetAddress);
   return {
     kind: 'confirmed',
     action,

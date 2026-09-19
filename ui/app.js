@@ -4,7 +4,7 @@ import { estimateCurrentCopper, formatLocalHhmm } from '../dist/src/copper-estim
 
 const $ = (id) => document.getElementById(id);
 const FLEET_COLUMNS_KEY = 'aepa.fleetColumns.v1';
-const AUTOMATION_DRAFT_KEY = 'aepa.automationDraft.v1';
+const AUTOMATION_DRAFT_KEY = 'aepa.automationDrafts.v2';
 let settings;
 let signerStatus;
 let loadedFleets = [];
@@ -64,10 +64,11 @@ function renderFleets(fleets) {
       if (column.id === 'state' || column.id === 'ownership') {
         const pill = document.createElement('span');
         pill.className = `state-pill${column.id === 'ownership' && value === 'Managed' ? ' warning' : ''}`;
-        const mining = column.id === 'state' ? miningPillContent(value) : null;
+        const mining = column.id === 'state' ? miningPillContent(value, fleet.address) : null;
         pill.textContent = mining ? mining.label : value;
         if (mining) {
           pill.dataset.miningPill = 'true';
+          pill.dataset.fleetAddress = fleet.address;
           bindMiningPill(pill);
         }
         cell.append(pill);
@@ -189,10 +190,11 @@ function renderStatusPanel() {
     name.textContent = fleet.name;
     const pill = document.createElement('span');
     pill.className = 'state-pill';
-    const mining = miningPillContent(fleet.state);
+    const mining = miningPillContent(fleet.state, fleet.address);
     pill.textContent = mining ? mining.label : fleet.state;
     if (mining) {
       pill.dataset.miningPill = 'true';
+      pill.dataset.fleetAddress = fleet.address;
       bindMiningPill(pill);
     }
     // Status bar is fleet data only: name + state pill, no activity/error text.
@@ -201,24 +203,30 @@ function renderStatusPanel() {
   }
 }
 
+function savedDrafts() {
+  const assignments = automationRuntime?.assignments ?? (automationRuntime?.assignment ? [automationRuntime.assignment] : []);
+  return assignments.map(({ fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode }) => ({
+    fleetAddress, assignment, homeSystemAddress, resourceId, destinationAddress, travelMode,
+  }));
+}
+
+function readAutomationDrafts() {
+  try {
+    const value = JSON.parse(localStorage.getItem(AUTOMATION_DRAFT_KEY));
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
+
+function writeAutomationDrafts() {
+  const drafts = [...document.querySelectorAll('.automation-fleet-row')].map(readAutomationRow);
+  localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify(drafts));
+  return drafts;
+}
+
 function restoreSavedAssignment() {
-  const saved = automationRuntime?.assignment;
-  if (saved) {
-    localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify({
-      fleetAddress: saved.fleetAddress,
-      assignment: saved.assignment,
-      homeSystemAddress: saved.homeSystemAddress,
-      resourceId: saved.resourceId,
-      destinationAddress: saved.destinationAddress,
-      travelMode: saved.travelMode,
-    }));
-    if (automationCatalog) renderAutomationCatalog(automationCatalog);
-    $('configuration-detail').textContent = 'Reverted to the previously saved assignments.';
-  } else {
-    localStorage.removeItem(AUTOMATION_DRAFT_KEY);
-    if (automationCatalog) renderAutomationCatalog(automationCatalog);
-    $('configuration-detail').textContent = 'No saved assignment to restore yet.';
-  }
+  const drafts = savedDrafts();
+  localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify(drafts));
+  renderAutomationRows(drafts.length ? drafts : [{}]);
 }
 
 function showSettings(open) { $('settings-overlay').hidden = !open; }
@@ -258,82 +266,127 @@ function replaceSelectOptions(select, options, preferredValue) {
     element.textContent = option.label;
     select.append(element);
   }
-  if (preferredValue && options.some((option) => String(option.value) === String(preferredValue))) select.value = String(preferredValue);
+  if (preferredValue != null && options.some((option) => String(option.value) === String(preferredValue))) select.value = String(preferredValue);
 }
 
-function readAutomationDraft() {
-  try { return JSON.parse(localStorage.getItem(AUTOMATION_DRAFT_KEY)) || {}; }
-  catch { return {}; }
+function readAutomationRow(row) {
+  return {
+    fleetAddress: row.querySelector('[data-field="fleet"]').value,
+    assignment: row.querySelector('[data-field="assignment"]').value,
+    homeSystemAddress: row.querySelector('[data-field="home"]').value,
+    resourceId: Number(row.querySelector('[data-field="resource"]').value),
+    destinationAddress: row.querySelector('[data-field="destination"]').value,
+    travelMode: row.querySelector('[data-field="travel"]').value,
+  };
+}
+
+function availableFleetOptions(row, preferredValue) {
+  const used = new Set([...document.querySelectorAll('.automation-fleet-row')]
+    .filter((candidate) => candidate !== row)
+    .map((candidate) => candidate.querySelector('[data-field="fleet"]').value));
+  return automationCatalog.fleets
+    .filter((fleet) => fleet.address === preferredValue || !used.has(fleet.address))
+    .map((fleet) => ({ value: fleet.address, label: `${fleet.name} | ${fleet.state}` }));
+}
+
+function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
+  const draft = readAutomationRow(row);
+  const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === draft.homeSystemAddress);
+  const destinations = home && Number.isSafeInteger(draft.resourceId)
+    ? rankMiningDestinations({ faction: automationCatalog.faction, resourceId: draft.resourceId, home: home.coordinates, destinations: automationCatalog.destinations })
+    : [];
+  const destination = row.querySelector('[data-field="destination"]');
+  replaceSelectOptions(destination, destinations.map((value) => ({ value: value.address, label: value.label })), preferredDestination);
+  const selected = destinations.find((value) => value.address === destination.value);
+  const travel = row.querySelector('[data-field="travel"]');
+  travel.options[0].textContent = selected?.distance === 0 ? 'Not required (same system)' : 'Auto';
+  travel.disabled = selected?.distance === 0;
+  if (selected?.distance === 0) travel.value = 'auto';
+  else if (preferredTravelMode && [...travel.options].some((option) => option.value === preferredTravelMode)) travel.value = preferredTravelMode;
+  writeAutomationDrafts();
+  updateAssignmentControls();
+}
+
+function createAutomationRow(draft = {}) {
+  const row = document.createElement('div');
+  row.className = 'automation-fleet-row';
+  row.innerHTML = `<div class="field-grid compact-field-grid">
+    <label>Fleet<select data-field="fleet"></select></label>
+    <label>Assignment<select data-field="assignment"><option value="mining">Mining</option></select></label>
+    <label>Home Starbase<select data-field="home"></select></label>
+    <label>Resource<select data-field="resource"></select></label>
+    <label class="destination-field">Mining Destination<small>Region | System | Asteroid belt | Distance</small><select data-field="destination"></select></label>
+    <label>Travel<select data-field="travel"><option value="auto">Auto</option><option value="warp">Warp</option><option value="subwarp">Subwarp</option></select></label>
+    <button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button>
+  </div>`;
+  const fleet = row.querySelector('[data-field="fleet"]');
+  replaceSelectOptions(fleet, availableFleetOptions(row, draft.fleetAddress), draft.fleetAddress);
+  replaceSelectOptions(row.querySelector('[data-field="home"]'), automationCatalog.homeStarbases.map((home) => ({ value: home.systemAddress, label: `${formatRegionCode(home.regionOwner, home.regionId)} | ${home.systemName}` })), draft.homeSystemAddress);
+  replaceSelectOptions(row.querySelector('[data-field="resource"]'), automationCatalog.resources.map((resource) => ({ value: resource.id, label: resource.name })), draft.resourceId ?? automationCatalog.resources.find((resource) => resource.name === 'Copper Ore')?.id);
+  row.querySelector('[data-field="assignment"]').value = draft.assignment || 'mining';
+  for (const select of row.querySelectorAll('select')) select.addEventListener('change', () => {
+    if (select.dataset.field === 'fleet') renderAutomationRows(writeAutomationDrafts());
+    else refreshAutomationRow(row, row.querySelector('[data-field="destination"]').value, row.querySelector('[data-field="travel"]').value);
+  });
+  row.querySelector('.remove-fleet').onclick = () => {
+    row.remove();
+    renderAutomationRows(writeAutomationDrafts());
+  };
+  refreshAutomationRow(row, draft.destinationAddress, draft.travelMode);
+  const persisted = (automationRuntime?.assignments ?? []).find((assignment) => assignment.fleetAddress === fleet.value);
+  if (persisted?.enabled || persisted?.status === 'paused') {
+    for (const select of row.querySelectorAll('select')) select.disabled = true;
+    row.querySelector('.remove-fleet').disabled = true;
+    row.classList.add('locked');
+  }
+  return row;
+}
+
+function renderAutomationRows(drafts) {
+  const host = $('automation-rows');
+  host.replaceChildren();
+  const source = drafts.length ? drafts : [{}];
+  for (const draft of source) host.append(createAutomationRow(draft));
+  const rows = [...host.querySelectorAll('.automation-fleet-row')];
+  for (const row of rows) row.querySelector('.remove-fleet').hidden = rows.length === 1;
+  $('add-fleet').disabled = rows.length >= automationCatalog.fleets.length;
+  writeAutomationDrafts();
+  updateAssignmentControls();
+}
+
+function renderAutomationIssues(state) {
+  const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
+  const issues = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
+  $('automation-issues').hidden = issues.length === 0;
+  $('automation-issue-list').replaceChildren(...issues.map((assignment) => {
+    const item = document.createElement('div');
+    item.className = 'automation-issue';
+    const name = document.createElement('strong'); name.textContent = assignment.fleetName;
+    const detail = document.createElement('span'); detail.textContent = assignment.lastError || `Automation is ${assignment.status}`;
+    item.append(name, detail);
+    return item;
+  }));
+}
+
+function updateAssignmentControls() {
+  const assignments = automationRuntime?.assignments ?? [];
+  const rows = [...document.querySelectorAll('.automation-fleet-row')];
+  $('save-assignment').disabled = rows.length === 0 || rows.some((row) => !row.querySelector('[data-field="destination"]').value);
+  $('automation-mode').textContent = assignments.some((assignment) => assignment.enabled) ? `LIVE — ${assignments.filter((assignment) => assignment.enabled).length} running` : assignments.some((assignment) => assignment.status === 'paused') ? 'Attention required' : 'Disabled';
 }
 
 function renderAutomationState(state) {
   automationRuntime = state;
-  const assignment = state?.assignment;
-  const running = assignment?.enabled && assignment.status === 'running';
-  const reconciliationRequired = assignment?.status === 'paused';
-  $('save-assignment').disabled = running || reconciliationRequired || !$('automation-destination').value;
-  $('automation-mode').textContent = running ? 'LIVE — running' : assignment?.status === 'paused' ? 'Paused' : 'Disabled';
-  const latest = state?.activity?.[0];
-  // While mining, the redundant "Mining remains active until …" waiting line is
-  // hidden: the State pill already shows the durable target stop time locally.
-  const waitingLineHidden = running && latest?.kind === 'waiting' && /Mining remains active until/.test(latest.detail ?? '');
-  $('automation-activity').textContent = waitingLineHidden
-    ? 'Mining in progress — see the fleet State pill for the stop time and live Copper estimate.'
-    : latest
-      ? `${new Date(latest.occurredAt).toLocaleString()} · ${latest.kind.toUpperCase()}${latest.action ? ` · ${latest.action}` : ''}${latest.signature ? ` · ${short(latest.signature)}` : ''} · ${latest.detail}`
-      : 'No automatic activity recorded.';
-}
-
-function selectedAutomationDraft() {
-  return {
-    fleetAddress: $('automation-fleet').value,
-    assignment: $('automation-assignment').value,
-    homeSystemAddress: $('automation-home').value,
-    resourceId: Number($('automation-resource').value),
-    destinationAddress: $('automation-destination').value,
-    travelMode: $('automation-travel').value,
-  };
-}
-
-function refreshMiningDestinations(preferredDestination, preferredTravelMode) {
-  if (!automationCatalog) return;
-  const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === $('automation-home').value);
-  const resourceId = Number($('automation-resource').value);
-  if (!home || !Number.isSafeInteger(resourceId)) return;
-  const destinations = rankMiningDestinations({ faction: automationCatalog.faction, resourceId, home: home.coordinates, destinations: automationCatalog.destinations });
-  replaceSelectOptions($('automation-destination'), destinations.map((destination) => ({ value: destination.address, label: destination.label })), preferredDestination);
-  const selected = destinations.find((destination) => destination.address === $('automation-destination').value);
-  const travel = $('automation-travel');
-  const autoOption = travel.options[0];
-  if (selected?.distance === 0) {
-    autoOption.textContent = 'Not required (same system)';
-    travel.value = 'auto';
-    travel.disabled = true;
-  } else {
-    autoOption.textContent = 'Auto';
-    travel.disabled = false;
-    if (preferredTravelMode && [...travel.options].some((option) => option.value === preferredTravelMode)) travel.value = preferredTravelMode;
-  }
-  const fleet = automationCatalog.fleets.find((candidate) => candidate.address === $('automation-fleet').value);
-  const resource = automationCatalog.resources.find((candidate) => candidate.id === resourceId);
-  $('configuration-route').textContent = selected && fleet && resource
-    ? `${fleet.name} · ${resource.name} · ${selected.label}`
-    : 'No eligible asteroid belt for this configuration';
-  $('configuration-detail').textContent = selected?.distance === 0
-    ? 'Same-system assignment; travel is not required. Save enables live execution immediately.'
-    : 'Travel route is shown for configuration only; automatic execution is not yet supported for this route.';
-  $('save-assignment').disabled = !selected || automationRuntime?.assignment?.enabled === true || automationRuntime?.assignment?.status === 'paused';
+  renderAutomationIssues(state);
+  updateAssignmentControls();
 }
 
 function renderAutomationCatalog(catalog) {
   automationCatalog = catalog;
-  const draft = automationRuntime?.assignment || readAutomationDraft();
-  replaceSelectOptions($('automation-fleet'), catalog.fleets.map((fleet) => ({ value: fleet.address, label: `${fleet.name} | ${fleet.state}` })), draft.fleetAddress || catalog.fleets.find((fleet) => fleet.name === 'MF-01')?.address);
-  replaceSelectOptions($('automation-home'), catalog.homeStarbases.map((home) => ({ value: home.systemAddress, label: `${formatRegionCode(home.regionOwner, home.regionId)} | ${home.systemName}` })), draft.homeSystemAddress);
-  replaceSelectOptions($('automation-resource'), catalog.resources.map((resource) => ({ value: resource.id, label: resource.name })), draft.resourceId || catalog.resources.find((resource) => resource.name === 'Copper Ore')?.id);
+  const drafts = savedDrafts();
+  renderAutomationRows(drafts.length ? drafts : (readAutomationDrafts().length ? readAutomationDrafts() : [{}]));
   $('automation-empty').hidden = true;
   $('automation-config').hidden = false;
-  refreshMiningDestinations(draft.destinationAddress, draft.travelMode);
 }
 
 let miningTooltip;
@@ -378,7 +431,7 @@ function hideMiningTooltip() {
 
 function bindMiningPill(pill) {
   pill.addEventListener('mouseenter', () => {
-    const content = miningPillContent('mining');
+    const content = miningPillContent('mining', pill.dataset.fleetAddress);
     if (!content?.title) return;
     showMiningTooltip(pill, content.title);
   });
@@ -386,15 +439,16 @@ function bindMiningPill(pill) {
   pill.addEventListener('blur', hideMiningTooltip);
 }
 
-function miningPillContent(state) {
+function miningPillContent(state, fleetAddress) {
   if (state !== 'mining') return null;
-  const stop = automationRuntime?.assignment?.targetStopAtUnixSeconds;
+  const assignment = (automationRuntime?.assignments ?? []).find((candidate) => candidate.fleetAddress === fleetAddress) ?? automationRuntime?.assignment;
+  const stop = assignment?.targetStopAtUnixSeconds;
   const plan = lastCopperLoopPlan;
   if (!stop) return { label: 'mining', title: '' };
   const label = `Mining ${formatLocalHhmm(BigInt(stop))}`;
   // Linear estimate holds only when cargo is the limiting event; otherwise keep
   // the pill without a counter rather than show a wrong number.
-  if (!plan || plan.limitingEvent !== 'cargo') return { label, title: '' };
+  if (!plan || plan.fleet !== assignment?.fleetName || plan.limitingEvent !== 'cargo') return { label, title: '' };
   const current = estimateCurrentCopper({
     nowUnixSeconds: BigInt(Math.floor(Date.now() / 1_000)),
     targetStopAtUnixSeconds: BigInt(stop),
@@ -406,7 +460,7 @@ function miningPillContent(state) {
 
 function applyMiningPills() {
   for (const pill of document.querySelectorAll('.state-pill[data-mining-pill]')) {
-    const content = miningPillContent('mining');
+    const content = miningPillContent('mining', pill.dataset.fleetAddress);
     if (!content) continue;
     if (pill.textContent !== content.label) pill.textContent = content.label;
   }
@@ -414,7 +468,7 @@ function applyMiningPills() {
   // estimate in place instead of touching the native OS tooltip, which on
   // Windows rebuilds on every title change and causes "Keine Rückmeldung".
   if (miningTooltipAnchor) {
-    const content = miningPillContent('mining');
+    const content = miningPillContent('mining', miningTooltipAnchor.dataset.fleetAddress);
     if (!content?.title) {
       hideMiningTooltip();
     } else if (content.title !== miningTooltipShownValue) {
@@ -446,25 +500,28 @@ $('show-status').onclick = () => setStatusOpen($('status-panel').hidden);
 $('close-status').onclick = () => setStatusOpen(false);
 $('show-fleets').onclick = () => setActivePage('fleets');
 $('show-automation').onclick = () => setActivePage('automation');
-for (const id of ['automation-fleet', 'automation-home', 'automation-resource', 'automation-destination', 'automation-travel']) {
-  $(id).addEventListener('change', () => refreshMiningDestinations($('automation-destination').value, $('automation-travel').value));
-}
+$('add-fleet').onclick = () => {
+  const drafts = writeAutomationDrafts();
+  const used = new Set(drafts.map((draft) => draft.fleetAddress));
+  const next = automationCatalog.fleets.find((fleet) => !used.has(fleet.address));
+  if (next) renderAutomationRows([...drafts, { fleetAddress: next.address }]);
+};
 $('save-assignment').onclick = async () => {
   const button = $('save-assignment');
   button.disabled = true;
-  $('configuration-detail').textContent = 'Validating the assignment against fresh C4 data…';
   try {
-    const draft = selectedAutomationDraft();
-    localStorage.setItem(AUTOMATION_DRAFT_KEY, JSON.stringify(draft));
-    const state = await window.aepa.saveAutomationAssignment(draft);
+    const drafts = writeAutomationDrafts();
+    const state = await window.aepa.saveAutomationAssignment(drafts);
     renderAutomationState(state);
-    $('configuration-detail').textContent = state?.assignment?.enabled
-      ? 'Assignment saved — live execution enabled automatically. No simulation before sends.'
-      : 'Assignment saved, but live execution could not be enabled (see status).';
+    renderAutomationRows(savedDrafts());
   } catch (error) {
-    $('configuration-detail').textContent = `BLOCKED — ${error.message || String(error)}`;
+    $('automation-issues').hidden = false;
+    const item = document.createElement('div');
+    item.className = 'automation-issue';
+    item.textContent = `Save blocked — ${error.message || String(error)}`;
+    $('automation-issue-list').replaceChildren(item);
   } finally {
-    button.disabled = automationRuntime?.assignment?.enabled === true || automationRuntime?.assignment?.status === 'paused';
+    updateAssignmentControls();
   }
 };
 $('cancel-assignment').onclick = restoreSavedAssignment;

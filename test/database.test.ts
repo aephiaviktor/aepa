@@ -99,6 +99,29 @@ test('SQLite persists a disabled assignment, runtime state, and durable activity
   database.close();
 });
 
+test('SQLite persists independent runtime state for multiple fleet assignments', () => {
+  const database = new AepaDatabase(':memory:');
+  const base = {
+    profile: 'profile-1', assignment: 'mining' as const,
+    homeSystemAddress: 'eternity', homeSystemId: 10 as const, homeSystemName: 'Eternity' as const,
+    resourceId: 311 as const, resourceName: 'Copper Ore' as const,
+    destinationAddress: 'ioki', destinationName: 'Ioki' as const, travelMode: 'auto' as const,
+  };
+  database.saveAutomationAssignments([
+    { ...base, fleetAddress: 'fleet-mf01', fleetName: 'MF-01' },
+    { ...base, fleetAddress: 'fleet-mf02', fleetName: 'MF-02' },
+  ]);
+  database.setAutomationEnabled(true, 'fleet-mf01');
+  database.setAutomationEnabled(true, 'fleet-mf02');
+  database.setAutomationTargetStop(2_000n, 'fleet-mf02');
+  database.pauseAutomation('MF-01 issue', 'fleet-mf01');
+  assert.deepEqual(database.listAutomationAssignments().map(({ fleetName, status, targetStopAtUnixSeconds }) => ({ fleetName, status, targetStopAtUnixSeconds })), [
+    { fleetName: 'MF-01', status: 'paused', targetStopAtUnixSeconds: undefined },
+    { fleetName: 'MF-02', status: 'running', targetStopAtUnixSeconds: 2_000n },
+  ]);
+  database.close();
+});
+
 test('SQLite persists catalog sync metadata and keeps the last-good catalog across failures', () => {
   const database = new AepaDatabase(':memory:');
   const scope = 'profile-1';

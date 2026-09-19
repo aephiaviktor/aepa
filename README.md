@@ -6,30 +6,31 @@ the operational direction follows SLYA, rebuilt against the C4 account model.
 ## Current testnet scope
 
 - Locked to the C4 z.ink PTR/testnet deployment.
-- Stores settings, last-good fleet snapshots and sync metadata, one Automation
-  assignment, runtime checkpoints, and activity locally in SQLite.
+- Stores settings, last-good fleet snapshots and sync metadata, per-fleet Automation
+  assignments, runtime checkpoints, and activity locally in SQLite.
 - Renders the cached fleet snapshot immediately and refreshes it from C4 at the
   configured interval; AEPA always reconnects on its own, so there is no manual
   "Refresh now" button.
 - Discovers live faction territories, systems, asteroid belts, and resources.
 - Stores the C4 authority signer with Electron/Windows OS encryption; the key is
   never stored in SQLite and is revalidated against the active Profile authority.
-- Sends the proven `MF-01 / Eternity / Ioki / Copper Ore / same-system` cycle
-  only after a signature-verified, read-only pre-send simulation succeeds.
+- Sends the proven `Eternity / Ioki / Copper Ore / same-system` cycle for each
+  selected fleet only after a signature-verified, read-only pre-send simulation succeeds.
 
 ## Automatic-send model
 
-Saving a fleet assignment automatically enables live execution; there is no
-separate enable step. The runner executes at most one action per tick and AEPA:
+Saving fleet assignments automatically enables live execution for every added
+fleet; there is no separate enable step. The round-robin runner executes at most
+one action per tick and AEPA:
 
 1. reads fresh C4 state and selects at most one next action;
-2. re-reads and verifies the exact MF-01 action and active authority;
+2. re-reads and verifies the exact selected Fleet address/name, action, and active authority;
 3. signs and simulates the exact assembled transaction read-only; only on success
    does it send exactly once with RPC preflight disabled (`maxRetries: 0`);
 4. waits for confirmation and verifies resulting fleet state;
 5. records the checkpoint and activity durably before advancing.
 
-Only one runner tick may execute at a time. Any error pauses the assignment. A
+Only one runner tick may execute at a time. An error pauses only that fleet's assignment. A
 plan-stage pause (nothing was submitted) is retried automatically on the normal
 refresh cadence; a pause that followed a submitted transaction stays paused
 until its chain state has been reconciled out of band. Confirmed mining start
@@ -43,8 +44,8 @@ current state in real time, updated from the cached snapshot without extra
 writes. Every automatic transaction must pass the signed pre-send simulation
 gate before AEPA broadcasts it.
 
-Other resources, destinations, fleets, and inter-system travel may be explored
-in the configuration UI, but the trusted main process rejects them for automatic
+Other resources, destinations, and inter-system travel may be explored in the
+configuration UI, but the trusted main process rejects them for automatic
 execution until their transaction paths are implemented and tested.
 
 ## SQLite and on-chain authority
