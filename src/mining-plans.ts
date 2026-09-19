@@ -124,7 +124,7 @@ export function appendStopMiningCareerXp(plan: Plan, xp: StopMiningCareerXpAccou
     plan.kind !== 'fleet.stop-mining' ||
     step?.instruction.programAddress !== SAGE_ADDRESS ||
     step.instruction.data === undefined ||
-    accounts?.length !== 10 ||
+    accounts === undefined ||
     safeguard === undefined ||
     accounts[5]?.address !== safeguard.address ||
     accounts[6]?.address !== safeguard.game ||
@@ -133,6 +133,15 @@ export function appendStopMiningCareerXp(plan: Plan, xp: StopMiningCareerXpAccou
   ) {
     throw new Error('Atlas Kit returned an unsupported or unguarded stop-mining Plan');
   }
+  // Atlas Kit next now supplies its own canonical XP-runtime safeguard and
+  // account pair. Keep that freshly guarded Plan unchanged; appending the
+  // legacy v1 budget groups would duplicate an obsolete layout. Older Kit
+  // Plans have exactly ten accounts and still need AEPA's compatibility tail.
+  if (plan.preconditions.some((value) => value.kind === 'xp-runtime')) {
+    if (accounts.length < 12) throw new Error('Atlas Kit returned an incomplete XP-runtime stop-mining Plan');
+    return plan;
+  }
+  if (accounts.length !== 10) throw new Error('Atlas Kit returned an unsupported legacy stop-mining Plan');
   return createPlan({
     kind: plan.kind,
     summary: plan.summary,

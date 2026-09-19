@@ -97,6 +97,18 @@ test('stop mining appends Career-XP budgets while preserving Atlas Kit next safe
     [progressionConfig, AccountRole.READONLY],
     [pointsProgram, AccountRole.READONLY],
   ]);
+
+  const nativeXp = createPlan({
+    kind: guarded.kind,
+    summary: guarded.summary,
+    steps: [{ ...guarded.steps[0], instruction: { ...guarded.steps[0].instruction, accounts: [...baseAccounts, { address: pilot.careerXpBudget, role: AccountRole.WRITABLE }, { address: pilot.xpBudgetConfig, role: AccountRole.READONLY }] } }],
+    preconditions: [{
+      kind: 'xp-runtime', address: game, describes: 'Canonical XP runtime remains valid.',
+      intent: { game, gameVersion: 2, profile: authorization.profile, character: baseAccounts[4].address },
+      accounts: { xpBudget: pilot.careerXpBudget, xpBudgetConfig: pilot.xpBudgetConfig },
+    }, ...guarded.preconditions],
+  });
+  assert.strictEqual(appendStopMiningCareerXp(nativeXp, { pilot, mining, councilRank, progressionConfig, pointsProgram }), nativeXp);
 });
 
 test('stop mining refuses an unguarded Plan before adding Career-XP accounts', () => {
