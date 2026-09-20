@@ -1,6 +1,7 @@
 import { formatRegionCode, rankMiningDestinations } from '../dist/src/automation-options.js';
+import { automationDraftsEqual, formatMiningProgress } from '../dist/src/automation-ui.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
-import { estimateCurrentCopper, formatLocalHhmm } from '../dist/src/copper-estimate.js';
+import { formatLocalHhmm } from '../dist/src/copper-estimate.js';
 
 const $ = (id) => document.getElementById(id);
 const FLEET_COLUMNS_KEY = 'aepa.fleetColumns.v1';
@@ -12,7 +13,7 @@ let automationCatalog;
 let automationCatalogLoad;
 let automationRuntime;
 let lastFleetSnapshotKey;
-let lastCopperLoopPlan;
+let miningLoopPlans = new Map();
 
 function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
@@ -130,7 +131,8 @@ function renderFleetSnapshot(snapshot) {
     $('character').textContent = `Character ${short(payload.characterAddress)}`;
     $('character').title = payload.characterAddress;
   }
-  if (payload?.copperLoop) lastCopperLoopPlan = payload.copperLoop;
+  const plans = payload?.copperLoops ?? (payload?.copperLoop ? [payload.copperLoop] : []);
+  if (plans.length) miningLoopPlans = new Map(plans.map((plan) => [plan.fleetAddress, plan]));
   // Always try to load the automation catalog when missing: the catalog layer
   // serves the cached SQLite snapshot when the live z.ink read is unavailable,
   // so the Automation page stays populated during outages instead of a dead
@@ -208,7 +210,7 @@ function savedDrafts() {
   return assignments.map((record) => {
     const value = record.pendingAssignment || record;
     const { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode } = value;
-    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode };
+    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds: resourceIds ?? [resourceId], destinationAddress, travelMode };
   });
 }
 
@@ -306,7 +308,7 @@ function renderResourcePicker(row, destination, selectedIds = []) {
     input.dataset.resourceId = String(resource.id);
     input.checked = selected.includes(resource.id);
     label.append(document.createTextNode(resource.name));
-    input.addEventListener('change', () => { updateResourceCounter(row); writeAutomationDrafts(); });
+    input.addEventListener('change', () => { updateResourceCounter(row); writeAutomationDrafts(); updateAssignmentControls(); });
     host.append(label);
   }
   if (removed) {
@@ -408,16 +410,31 @@ function renderAutomationIssues(state) {
   }));
 }
 
+function syncPendingRowIndicators() {
+  const assignments = automationRuntime?.assignments ?? [];
+  for (const row of document.querySelectorAll('.automation-fleet-row')) {
+    const fleetAddress = row.querySelector('[data-field="fleet"]').value;
+    const persisted = assignments.find((assignment) => assignment.fleetAddress === fleetAddress);
+    row.classList.toggle('pending', !!persisted?.pendingAssignment);
+  }
+}
+
 function updateAssignmentControls() {
   const assignments = automationRuntime?.assignments ?? [];
   const rows = [...document.querySelectorAll('.automation-fleet-row')];
-  $('save-assignment').disabled = rows.length === 0 || rows.some((row) => !row.querySelector('[data-field="destination"]').value);
+  const drafts = rows.map(readAutomationRow);
+  const canSave = rows.length > 0 && rows.every((row) => row.querySelector('[data-field="destination"]').value && row.querySelectorAll('[data-resource-id]:checked').length > 0);
+  const dirty = !automationDraftsEqual(drafts, savedDrafts());
+  const save = $('save-assignment');
+  save.classList.toggle('dirty', canSave && dirty);
+  save.disabled = !canSave || !dirty;
   $('automation-mode').textContent = assignments.some((assignment) => assignment.enabled) ? `LIVE — ${assignments.filter((assignment) => assignment.enabled).length} running` : assignments.some((assignment) => assignment.status === 'paused') ? 'Attention required' : 'Disabled';
 }
 
 function renderAutomationState(state) {
   automationRuntime = state;
   renderAutomationIssues(state);
+  syncPendingRowIndicators();
   updateAssignmentControls();
 }
 
@@ -483,19 +500,16 @@ function miningPillContent(state, fleetAddress) {
   if (state !== 'mining') return null;
   const assignment = (automationRuntime?.assignments ?? []).find((candidate) => candidate.fleetAddress === fleetAddress) ?? automationRuntime?.assignment;
   const stop = assignment?.targetStopAtUnixSeconds;
-  const plan = lastCopperLoopPlan;
+  const plan = miningLoopPlans.get(fleetAddress);
   if (!stop) return { label: 'mining', title: '' };
   const label = `Mining ${formatLocalHhmm(BigInt(stop))}`;
-  // Linear estimate holds only when cargo is the limiting event; otherwise keep
-  // the pill without a counter rather than show a wrong number.
-  if (!plan || plan.fleet !== assignment?.fleetName || plan.limitingEvent !== 'cargo') return { label, title: '' };
-  const current = estimateCurrentCopper({
-    nowUnixSeconds: BigInt(Math.floor(Date.now() / 1_000)),
+  if (!plan || plan.fleet !== assignment?.fleetName || !plan.expectedResources?.length) return { label, title: '' };
+  const title = formatMiningProgress({
     targetStopAtUnixSeconds: BigInt(stop),
     targetMiningSeconds: BigInt(plan.targetMiningSeconds),
-    expectedCopperRaw: BigInt(plan.expectedCopperRaw),
-  });
-  return { label, title: `Estimated ${plan.resource}: ${current}/${plan.expectedCopperRaw}` };
+    expectedResources: plan.expectedResources.map((resource) => ({ name: resource.name, expectedRaw: BigInt(resource.expectedRaw) })),
+  }, BigInt(Math.floor(Date.now() / 1_000)));
+  return { label, title };
 }
 
 function applyMiningPills() {
@@ -626,7 +640,7 @@ $('clear-game-cache').onclick = async () => {
     await window.aepa.clearGameCache();
     automationCatalog = undefined;
     automationRuntime = undefined;
-    lastCopperLoopPlan = undefined;
+    miningLoopPlans = new Map();
     lastFleetSnapshot = undefined;
     lastFleetSnapshotKey = undefined;
     renderStatusPanel();

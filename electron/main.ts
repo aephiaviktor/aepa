@@ -115,8 +115,20 @@ app.whenReady().then(() => {
     database,
     getProfile: () => database.getSettings().playerProfile,
     getIntervalMs: () => Math.max(database.getSettings().refreshIntervalSeconds, 15) * 1_000,
-    load: () => loadC4Fleets(database.getSettings()),
-    toPayload: ({ characterAddress, copperLoop }) => ({ characterAddress, copperLoop }),
+    load: () => loadC4Fleets(database.getSettings(), database.listAutomationAssignments().map((assignment) => ({
+      fleetName: assignment.fleetName,
+      fleetAddress: assignment.fleetAddress,
+      scope: {
+        homeSystemId: assignment.homeSystemId,
+        homeSystemName: assignment.homeSystemName,
+        resourceId: assignment.resourceId,
+        resourceIds: assignment.resourceIds,
+        resourceName: assignment.resourceName,
+        destinationAddress: assignment.destinationAddress,
+        destinationName: assignment.destinationName,
+      },
+    }))),
+    toPayload: ({ characterAddress, copperLoop, copperLoops }) => ({ characterAddress, copperLoop, copperLoops }),
   });
   catalogSync = new CatalogSyncCoordinator({
     database,

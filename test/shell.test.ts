@@ -118,7 +118,7 @@ test('shell drops the zero-reserve preview and the manual simulation controls', 
   assert.doesNotMatch(script, /simulateNextStep|renderCopperLoop|unavoidableFoodRoundingRaw|transactionSignature|signature verified|simulateNextCopperStep/);
   // The fleet State pill estimate stays: it is fed by the same cached plan.
   assert.match(script, /copperLoop/);
-  assert.match(script, /estimateCurrentCopper/);
+  assert.match(script, /formatMiningProgress/);
   assert.match(script, /miningPillContent/);
 });
 
@@ -127,4 +127,25 @@ test('destination precedes checkbox resource picker with eight-resource counter'
   assert.match(source, /type="checkbox"/);
   assert.match(source, /\/8/);
   assert.ok(source.indexOf('aria-label="Mining Destination"') < source.indexOf('aria-label="Resources"'));
+});
+
+test('Save highlights only for valid unsaved assignment changes', async () => {
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
+  assert.match(script, /automationDraftsEqual/);
+  assert.match(script, /save\.classList\.toggle\('dirty', canSave && dirty\)/);
+  assert.match(script, /save\.disabled = !canSave \|\| !dirty/);
+  assert.match(styles, /#save-assignment:not\(\.dirty\)/);
+  assert.match(script, /row\.classList\.toggle\('pending', !!persisted\?\.pendingAssignment\)/);
+});
+
+test('mining tooltips use per-fleet multi-resource progress without Estimated', async () => {
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  const c4 = await readFile(join(process.cwd(), 'src/c4.ts'), 'utf8');
+  assert.match(script, /formatMiningProgress/);
+  assert.match(script, /miningLoopPlans\.get\(fleetAddress\)/);
+  assert.doesNotMatch(script, /title: `Estimated/);
+  assert.match(main, /copperLoops/);
+  assert.match(c4, /expectedResources/);
 });
