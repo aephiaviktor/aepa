@@ -110,11 +110,14 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
       }));
     });
     const resourceIds = [...new Set(destinations.flatMap((destination) => destination.resourceIds))].sort((left, right) => left - right);
-    const resources = await mapWithConcurrency(resourceIds, 4, async (id) => ({
-      id,
-      name: (await resolveCargo(sage.context, id)).name,
-      ...resolveMiningResourceEligibility(id, character, research.nodes),
-    }));
+    const resources = await mapWithConcurrency(resourceIds, 4, async (id) => {
+      const cargo = await resolveCargo(sage.context, id);
+      return {
+        id,
+        name: cargo.name,
+        ...resolveMiningResourceEligibility(cargo.categoryId, character, research.nodes),
+      };
+    });
     const registeredSystems = new Set(playerStarbases.map(starbase => String(starbase.system.address)));
     const homeStarbases = rankHomeStarbases(eligibleSystems.flatMap((system) => {
       const territorySystem = regionBySystemId.get(system.systemId);

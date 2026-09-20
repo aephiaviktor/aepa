@@ -378,11 +378,14 @@ async function planForDecision(
   if (decision.kind === 'start-mining') {
     const ids = scope.resourceIds ?? [scope.resourceId];
     const research = await getResearchCatalog(sage.context);
-    const resources = await Promise.all(ids.map(async id => ({
-      id,
-      name: (await resolveCargo(sage.context, id)).name,
-      ...resolveMiningResourceEligibility(id, character, research.nodes),
-    })));
+    const resources = await Promise.all(ids.map(async id => {
+      const cargo = await resolveCargo(sage.context, id);
+      return {
+        id,
+        name: cargo.name,
+        ...resolveMiningResourceEligibility(cargo.categoryId, character, research.nodes),
+      };
+    }));
     assertMiningResourcesAvailable(ids, resources);
     return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: ids, fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
   }

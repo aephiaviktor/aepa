@@ -11,7 +11,7 @@ export interface MiningProgressionInput {
   };
   modifiers: {
     unlockedNodes: readonly number[];
-    values: { researchTags: readonly number[] };
+    values: { researchTags: readonly number[]; cargoCategories: readonly number[] };
   };
 }
 
@@ -22,6 +22,7 @@ export interface MiningResearchNodeInput {
   xpCosts: readonly { category: string; minimumLevel: number }[];
   modifier: {
     researchTags: readonly number[];
+    cargoCategories: readonly number[];
     rareMineralDiscovery: readonly { cargoId: number }[];
   };
 }
@@ -58,12 +59,13 @@ function joinRequirements(values: readonly string[]): string {
 }
 
 export function resolveMiningResourceEligibility(
-  cargoId: number,
+  cargoCategoryId: number,
   character: MiningProgressionInput,
   nodes: readonly MiningResearchNodeInput[],
 ): MiningResourceEligibility {
-  const gates = nodes.filter(node => node.modifier.rareMineralDiscovery.some(discovery => discovery.cargoId === cargoId));
-  if (!gates.length || gates.some(node => character.modifiers.unlockedNodes.includes(node.id))) return { available: true };
+  if (character.modifiers.values.cargoCategories.includes(cargoCategoryId)) return { available: true };
+  const gates = nodes.filter(node => node.modifier.cargoCategories.includes(cargoCategoryId));
+  if (!gates.length) return { available: false, requirement: `Cargo category ${String(cargoCategoryId)} is not unlocked.` };
 
   const nodeByTag = new Map<number, MiningResearchNodeInput>();
   for (const node of nodes) for (const tag of node.modifier.researchTags) nodeByTag.set(tag, node);
