@@ -73,7 +73,7 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   for (const field of ['fleet', 'assignment', 'home', 'resource', 'destination', 'travel']) {
     assert.match(script, new RegExp(`data-field=\\"${field}\\"`));
   }
-  assert.match(html, /Region \| System \| Asteroid belt \| Distance/);
+  assert.match(html, /Region \| System \| Asteroid belt \| Home distance/);
   assert.match(html, /class="assignment-columns compact-field-grid"/);
   assert.match(html, /<h3>Fleet Log<\/h3>/);
   assert.ok(html.indexOf('id="add-fleet"') < html.indexOf('id="automation-issues"'), 'Fleet Log must be below Add Fleet inside Fleet Assignment');
@@ -127,6 +127,14 @@ test('destination precedes checkbox resource picker with eight-resource counter'
   assert.match(source, /type="checkbox"/);
   assert.match(source, /\/8/);
   assert.ok(source.indexOf('aria-label="Mining Destination"') < source.indexOf('aria-label="Resources"'));
+});
+
+test('travel mode precedes mining destination and same-system wording stays compact', async () => {
+  const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
+  assert.ok(source.indexOf('aria-label="Travel"') < source.indexOf('aria-label="Mining Destination"'));
+  assert.match(source, /Same system/);
+  assert.doesNotMatch(source, /Not required \(same system\)/);
+  assert.doesNotMatch(source, /travel unavailable/);
 });
 
 test('Save highlights only for valid unsaved assignment changes', async () => {

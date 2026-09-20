@@ -19,6 +19,17 @@ export interface CatalogSyncCoordinatorOptions {
   clearTimer?: (timer: NodeJS.Timeout) => void;
 }
 
+function hasCurrentFleetTravelData(catalog: unknown): catalog is MiningAutomationCatalog {
+  if (!catalog || typeof catalog !== 'object' || !Array.isArray((catalog as MiningAutomationCatalog).fleets)) return false;
+  return (catalog as MiningAutomationCatalog).fleets.every((fleet) =>
+    Number.isFinite(fleet.location?.x)
+    && Number.isFinite(fleet.location?.y)
+    && typeof fleet.travel?.fuelCapacityRaw === 'string'
+    && Number.isFinite(fleet.travel?.maxWarpDistance)
+    && Number.isFinite(fleet.travel?.subwarpFuelConsumptionRate)
+    && Number.isFinite(fleet.travel?.warpFuelConsumptionRate));
+}
+
 export class CatalogSyncCoordinator extends SyncCoordinator<MiningAutomationCatalog> {
   constructor(options: CatalogSyncCoordinatorOptions) {
     const internal: SyncCoordinatorOptions<MiningAutomationCatalog> = {
@@ -43,8 +54,8 @@ export class CatalogSyncCoordinator extends SyncCoordinator<MiningAutomationCata
     const cachedAgeMs = lastSucceededAt === undefined
       ? Number.POSITIVE_INFINITY
       : this.now().getTime() - new Date(lastSucceededAt).getTime();
-    if (snapshot.sync.status === 'ready' && snapshot.catalog !== undefined && cachedAgeMs < CATALOG_TTL_MS) {
-      return { source: 'cache', value: snapshot.catalog as MiningAutomationCatalog };
+    if (snapshot.sync.status === 'ready' && hasCurrentFleetTravelData(snapshot.catalog) && cachedAgeMs < CATALOG_TTL_MS) {
+      return { source: 'cache', value: snapshot.catalog };
     }
     const value = await this.refresh();
     return { source: 'live', value };

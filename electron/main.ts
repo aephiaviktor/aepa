@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMiningAutomationCatalog } from '../src/automation-catalog.js';
-import { assertAutomationCanEnable, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
+import { assertAutomationCanEnable, isCrossSystemTravelMode, validateSupportedAutomationAssignment } from '../src/automation-assignment.js';
 import { AutomaticCopperRunner, nextAutomationTickDelayMs, shouldAutoRetryPaused } from '../src/automation-runner.js';
 import { executeNextCopperStepOnce } from '../src/automatic-c4.js';
 import { getActiveC4ProfileAuthority, inspectNextCopperStep, loadC4Fleets, simulateNextCopperStepSigned, type MiningLoopScope } from '../src/c4.js';
@@ -137,7 +137,7 @@ app.whenReady().then(() => {
   automationRunner = new AutomaticCopperRunner(database, async (assignment) => {
     const settings = database.getSettings();
     if (assignment.profile !== settings.playerProfile) throw new Error('Saved Automation profile no longer matches Settings');
-    if (assignment.travelMode !== 'auto') throw new Error('Automatic execution currently supports same-system assignments only');
+    if (isCrossSystemTravelMode(assignment.travelMode)) throw new Error('Cross-system execution is disabled until C4 fuel, routing, arrival, and return behavior has been validated');
     const scopeFor = (value: typeof assignment): MiningLoopScope => ({
       homeSystemId: value.homeSystemId,
       homeSystemName: value.homeSystemName,
@@ -201,6 +201,10 @@ app.whenReady().then(() => {
       if (!Array.isArray(value) || value.length === 0) throw new Error('Save at least one fleet assignment');
       const validated = value.map((draft) => validateSupportedAutomationAssignment(draft, catalog, settings.playerProfile));
       const previous = database.listAutomationAssignments();
+      for (const candidate of validated.filter((assignment) => isCrossSystemTravelMode(assignment.travelMode))) {
+        const active = previous.find((assignment) => assignment.fleetAddress === candidate.fleetAddress && assignment.enabled);
+        if (active) throw new Error(`Pause ${candidate.fleetName} Automation before replacing its live assignment with cross-system travel`);
+      }
       for (const assignment of previous) {
         const replacement = validated.find((candidate) => candidate.fleetAddress === assignment.fleetAddress);
         if (!replacement && (assignment.enabled || assignment.status === 'paused')) {
@@ -220,6 +224,12 @@ app.whenReady().then(() => {
         for (const assignment of assignments) {
           if (assignment.enabled && assignment.status === 'running') continue;
           if (assignment.status === 'paused') continue;
+          if (isCrossSystemTravelMode(assignment.travelMode)) {
+            const detail = 'Cross-system assignment saved locally; execution remains disabled until C4 fuel, routing, arrival, and return behavior has been validated';
+            database.setAutomationBlocked(detail, assignment.fleetAddress);
+            database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', detail });
+            continue;
+          }
           assertAutomationCanEnable(assignment);
           if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
           database.setAutomationEnabled(true, assignment.fleetAddress);

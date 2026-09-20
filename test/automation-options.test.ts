@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatRegionCode, rankHomeStarbases, rankMiningDestinations } from '../src/automation-options.js';
+import { formatHomeStarbaseOption, formatRegionCode, isRoundTripReachable, rankHomeStarbases, rankMiningDestinations } from '../src/automation-options.js';
 
 test('formats live region ownership with the agreed compact labels', () => {
   assert.equal(formatRegionCode('ustur', 1), '1-US');
@@ -49,4 +49,27 @@ test('home starbases sort by numeric sector before name', () => {
     { systemAddress: 'c', systemId: 5, systemName: 'Core', regionId: 1 },
   ]);
   assert.deepEqual(homes.map(home => home.systemAddress), ['c', 'a', 'b', 'z']);
+});
+
+test('home starbase labels show fleet distance without cluttering auto-registration', () => {
+  assert.deepEqual(formatHomeStarbaseOption({
+    regionId: 1,
+    regionOwner: 'ustur',
+    systemFaction: 'ustur',
+    systemName: 'Eternity',
+    coordinates: { x: 4, y: 6 },
+    registered: false,
+  }, { x: 1, y: 2 }), {
+    label: '1-US | Eternity | 5',
+    title: 'Auto-registers on first service at Eternity.',
+  });
+});
+
+test('travel reachability reserves fuel for both legs and enforces coordinate-warp range', () => {
+  const fleet = { fuelCapacityRaw: '11', maxWarpDistance: 4, subwarpFuelConsumptionRate: 1, warpFuelConsumptionRate: 1 };
+  assert.equal(isRoundTripReachable('subwarp', 5, fleet), true);
+  assert.equal(isRoundTripReachable('subwarp', 5.01, fleet), false);
+  assert.equal(isRoundTripReachable('warp', 4, fleet), true);
+  assert.equal(isRoundTripReachable('warp', 4.01, fleet), false);
+  assert.equal(isRoundTripReachable('warp-lane', 5, fleet), true);
 });

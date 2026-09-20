@@ -1,4 +1,5 @@
 import type { MiningAutomationCatalog } from './automation-catalog.js';
+import { isRoundTripReachable, type TravelMode } from './automation-options.js';
 import { assertMiningResourcesAvailable } from './mining-research.js';
 
 export interface AutomationAssignmentInput {
@@ -24,13 +25,17 @@ export interface SavedAutomationAssignment {
   resourceName: string;
   destinationAddress: string;
   destinationName: string;
-  travelMode: 'auto';
+  travelMode: 'auto' | 'same-system' | 'subwarp' | 'warp' | 'warp-lane';
 }
 
 interface AutomationRuntimeGate {
   enabled: boolean;
   status: 'disabled' | 'running' | 'paused';
   lastError?: string;
+}
+
+export function isCrossSystemTravelMode(mode: string): boolean {
+  return mode === 'subwarp' || mode === 'warp' || mode === 'warp-lane';
 }
 
 export function assertAutomationCanEnable(assignment: AutomationRuntimeGate): void {
@@ -65,10 +70,15 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   const destination = catalog.destinations.find((candidate) => candidate.address === input.destinationAddress);
   if (!destination || !resources.every(resource => destination.resourceIds.includes(resource.id))) throw new Error(`${resource.name} is not available at the selected mining destination`);
   assertMiningResourcesAvailable(resources.map(resource => resource.id), catalog.resources);
-  if (destination.systemAddress !== home.systemAddress) {
-    throw new Error('Automatic cross-system travel is not available yet; select a mining destination in the Home Starbase system');
+  const travelMode = input.travelMode;
+  if (!['auto', 'same-system', 'subwarp', 'warp', 'warp-lane'].includes(travelMode ?? '')) throw new Error('Select a supported travel mode');
+  const sameSystem = destination.systemAddress === home.systemAddress;
+  if (!sameSystem && (travelMode === 'auto' || travelMode === 'same-system')) throw new Error('Select Subwarp, Warp, or Warp lane for a cross-system destination');
+  if (sameSystem && travelMode !== 'auto' && travelMode !== 'same-system') throw new Error('Select Same system for a same-system mining destination');
+  const distance = Math.hypot(destination.coordinates.x - home.coordinates.x, destination.coordinates.y - home.coordinates.y);
+  if (!sameSystem && !isRoundTripReachable(travelMode as TravelMode, distance, fleet.travel)) {
+    throw new Error(`${destination.name} is outside this Fleet's round-trip ${String(travelMode)} range from ${home.systemName}`);
   }
-  if (input.travelMode !== 'auto') throw new Error('Same-system mining does not use a travel mode');
   return {
     profile,
     fleetAddress: fleet.address,
@@ -82,6 +92,6 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
     resourceName: resources.map(resource => resource.name).join(', '),
     destinationAddress: destination.address,
     destinationName: destination.name,
-    travelMode: 'auto',
+    travelMode: travelMode as SavedAutomationAssignment['travelMode'],
   };
 }

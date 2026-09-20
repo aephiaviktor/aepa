@@ -4,7 +4,10 @@ import { assertAutomationCanEnable, assertAutomationCanReplace, validateSupporte
 
 const catalog = {
   faction: 'ustur' as const,
-  fleets: [{ address: 'fleet-mf01', name: 'MF-01', state: 'docked' }, { address: 'fleet-mf02', name: 'MF-02', state: 'idle' }],
+  fleets: [
+    { address: 'fleet-mf01', name: 'MF-01', state: 'docked', location: { x: 40, y: 30 }, travel: { fuelCapacityRaw: '100', maxWarpDistance: 10, subwarpFuelConsumptionRate: 1, warpFuelConsumptionRate: 1 } },
+    { address: 'fleet-mf02', name: 'MF-02', state: 'idle', location: { x: 40, y: 30 }, travel: { fuelCapacityRaw: '100', maxWarpDistance: 10, subwarpFuelConsumptionRate: 1, warpFuelConsumptionRate: 1 } },
+  ],
   homeStarbases: [{ systemAddress: 'eternity', systemId: 10, systemName: 'Eternity', regionId: 1, regionOwner: 'ustur' as const, coordinates: { x: 40, y: 30 }, registered: true }],
   resources: [{ id: 311, name: 'Copper Ore', available: true }, { id: 329, name: 'Carbon', available: true }, { id: 312, name: 'Cryo Formation Crystals', available: false, requirement: 'Requires research “Rare Mineral Discoveries” — Mining level 5 (current 1).' }],
   destinations: [{ address: 'ioki', name: 'Ioki', systemAddress: 'eternity', systemName: 'Eternity', systemFaction: 'ustur' as const, coordinates: { x: 40, y: 30 }, regionId: 1, regionOwner: 'ustur' as const, resourceIds: [311, 329] }, { address: 'far', name: 'Far Belt', systemAddress: 'elsewhere', systemName: 'Elsewhere', systemFaction: 'ustur' as const, coordinates: { x: 41, y: 30 }, regionId: 1, regionOwner: 'ustur' as const, resourceIds: [329] }],
@@ -30,11 +33,13 @@ test('running assignments remain editable while paused assignments retain reconc
   assert.doesNotThrow(() => assertAutomationCanEnable({ enabled: false, status: 'disabled' }));
 });
 
-test('rejects unknown resources, mismatched destinations, and unsupported cross-system travel', () => {
+test('rejects unknown resources, mismatched destinations, and invalid travel modes', () => {
   assert.throws(() => validateSupportedAutomationAssignment({ ...input, resourceId: 999 }, catalog, 'profile-1'), /resource/i);
   assert.throws(() => validateSupportedAutomationAssignment({ ...input, destinationAddress: 'far', resourceId: 311 }, catalog, 'profile-1'), /not available/i);
-  assert.throws(() => validateSupportedAutomationAssignment({ ...input, destinationAddress: 'far', resourceId: 329 }, catalog, 'profile-1'), /cross-system/i);
-  assert.throws(() => validateSupportedAutomationAssignment({ ...input, travelMode: 'warp' }, catalog, 'profile-1'), /does not use/i);
+  assert.equal(validateSupportedAutomationAssignment({ ...input, destinationAddress: 'far', resourceId: 329, travelMode: 'subwarp' }, catalog, 'profile-1').travelMode, 'subwarp');
+  assert.throws(() => validateSupportedAutomationAssignment({ ...input, destinationAddress: 'far', resourceId: 329, travelMode: 'same-system' }, catalog, 'profile-1'), /cross-system/i);
+  assert.throws(() => validateSupportedAutomationAssignment({ ...input, travelMode: 'warp' }, catalog, 'profile-1'), /same-system/i);
+  assert.throws(() => validateSupportedAutomationAssignment({ ...input, travelMode: 'teleport' }, catalog, 'profile-1'), /travel mode/i);
 });
 
 test('validates and sorts one to eight unique resources at the destination', () => {

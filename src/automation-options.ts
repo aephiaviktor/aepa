@@ -23,6 +23,15 @@ export interface RankedMiningDestination extends MiningDestinationCandidate {
   label: string;
 }
 
+export type TravelMode = 'auto' | 'same-system' | 'subwarp' | 'warp' | 'warp-lane';
+
+export interface FleetTravelCapability {
+  fuelCapacityRaw: string;
+  maxWarpDistance: number;
+  subwarpFuelConsumptionRate: number;
+  warpFuelConsumptionRate: number;
+}
+
 const REGION_PREFIX: Readonly<Record<RegionAlignment, string>> = {
   mud: 'MT',
   oni: 'OR',
@@ -40,6 +49,30 @@ export function rankHomeStarbases<T extends { regionId: number; systemName: stri
   return [...homes].sort((left, right) => left.regionId - right.regionId
     || left.systemName.localeCompare(right.systemName)
     || left.systemId - right.systemId);
+}
+
+export function formatHomeStarbaseOption(
+  home: { regionId: number; regionOwner: RegionAlignment; systemFaction?: FactionAlignment; systemName: string; coordinates: Coordinates; registered: boolean },
+  fleetLocation: Coordinates,
+): { label: string; title: string } {
+  const distance = Number(Math.hypot(home.coordinates.x - fleetLocation.x, home.coordinates.y - fleetLocation.y).toFixed(2));
+  return {
+    label: `${formatRegionCode(home.regionOwner, home.regionId, home.systemFaction)} | ${home.systemName} | ${distance}`,
+    title: home.registered ? `Registered at ${home.systemName}.` : `Auto-registers on first service at ${home.systemName}.`,
+  };
+}
+
+/** Conservative configuration-time reach check. Each leg is rounded up before
+ * doubling so the Fleet always reserves enough tank capacity to return home.
+ * Warp-lane routing/tolls are still validated by the action planner.
+ */
+export function isRoundTripReachable(mode: TravelMode, distance: number, fleet: FleetTravelCapability): boolean {
+  if (!Number.isFinite(distance) || distance < 0) return false;
+  if (mode === 'auto' || mode === 'same-system') return distance === 0;
+  if (mode === 'warp' && distance > fleet.maxWarpDistance) return false;
+  const rate = mode === 'subwarp' ? fleet.subwarpFuelConsumptionRate : fleet.warpFuelConsumptionRate;
+  if (!Number.isFinite(rate) || rate < 0) return false;
+  return BigInt(Math.ceil(distance * rate)) * 2n <= BigInt(fleet.fuelCapacityRaw);
 }
 
 export function rankMiningDestinations(input: {

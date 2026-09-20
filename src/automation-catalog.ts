@@ -12,7 +12,13 @@ const READ_OPTIONS = { commitment: 'confirmed', policy: 'no-store' } as const;
 
 export interface MiningAutomationCatalog {
   faction: FactionAlignment;
-  fleets: readonly { address: string; name: string; state: string }[];
+  fleets: readonly {
+    address: string;
+    name: string;
+    state: string;
+    location: { x: number; y: number };
+    travel: { fuelCapacityRaw: string; maxWarpDistance: number; subwarpFuelConsumptionRate: number; warpFuelConsumptionRate: number };
+  }[];
   homeStarbases: readonly {
     systemAddress: string;
     systemId: number;
@@ -134,7 +140,18 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
     }));
     return {
       faction,
-      fleets: fleets.map((fleet) => ({ address: fleet.address, name: fleet.name, state: fleet.state.kind })),
+      fleets: fleets.map((fleet) => ({
+        address: fleet.address,
+        name: fleet.name,
+        state: fleet.state.kind,
+        location: fleet.location,
+        travel: {
+          fuelCapacityRaw: fleet.capacities.fuel.total.toString(),
+          maxWarpDistance: fleet.stats.movement.maxWarpDistance.value,
+          subwarpFuelConsumptionRate: fleet.stats.movement.subwarpFuelConsumptionRate.value,
+          warpFuelConsumptionRate: fleet.stats.movement.warpFuelConsumptionRate.value,
+        },
+      })),
       homeStarbases,
       resources: resources.sort((left, right) => left.name.localeCompare(right.name)),
       destinations,

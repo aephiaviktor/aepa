@@ -61,3 +61,27 @@ test('stale or missing catalog reloads, persists, and reports live source', asyn
   assert.equal((snapshot.catalog as MiningAutomationCatalog).faction, 'oni');
   database.close();
 });
+
+test('a fresh legacy catalog without fleet travel data reloads before reaching the UI', async () => {
+  const database = new AepaDatabase(':memory:');
+  const now = new Date('2026-09-15T12:00:00.000Z');
+  database.beginCatalogSync(scope, '2026-09-15T11:55:00.000Z');
+  database.completeCatalogSync(scope, {
+    ...catalog,
+    fleets: [{ address: 'fleet-1', name: 'MF-01', state: 'docked' }],
+  }, {
+    startedAt: '2026-09-15T11:55:00.000Z', succeededAt: '2026-09-15T11:55:05.000Z',
+  });
+  let loads = 0;
+  const coordinator = new CatalogSyncCoordinator({
+    database,
+    getScope: () => scope,
+    now: () => now,
+    load: async () => { loads += 1; return catalog; },
+  });
+
+  const view = await coordinator.resolve();
+  assert.equal(view.source, 'live');
+  assert.equal(loads, 1);
+  database.close();
+});

@@ -1,4 +1,4 @@
-import { formatRegionCode, rankMiningDestinations } from '../dist/src/automation-options.js';
+import { formatHomeStarbaseOption, isRoundTripReachable, rankMiningDestinations } from '../dist/src/automation-options.js';
 import { automationDraftsEqual, formatMiningProgress } from '../dist/src/automation-ui.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
 import { formatLocalHhmm } from '../dist/src/copper-estimate.js';
@@ -320,6 +320,7 @@ function replaceSelectOptions(select, options, preferredValue) {
     const element = document.createElement('option');
     element.value = String(option.value);
     element.textContent = option.label;
+    if (option.title) element.title = option.title;
     element.disabled = !!option.disabled;
     select.append(element);
   }
@@ -397,19 +398,23 @@ function updateResourceCounter(row) {
 function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   const draft = readAutomationRow(row);
   const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === draft.homeSystemAddress);
-  const destinations = home
+  const travel = row.querySelector('[data-field="travel"]');
+  if (preferredTravelMode && [...travel.options].some((option) => option.value === preferredTravelMode)) travel.value = preferredTravelMode;
+  const allDestinations = home
     ? rankMiningDestinations({ faction: automationCatalog.faction, home: home.coordinates, destinations: automationCatalog.destinations })
     : [];
+  const selectedFleet = automationCatalog.fleets.find((candidate) => candidate.address === draft.fleetAddress);
+  const destinations = travel.value === 'auto' || travel.value === 'same-system'
+    ? allDestinations.filter((value) => value.systemAddress === home.systemAddress)
+    : selectedFleet
+      ? allDestinations.filter((value) => value.systemAddress !== home.systemAddress && isRoundTripReachable(travel.value, value.distance, selectedFleet.travel))
+      : [];
   const destination = row.querySelector('[data-field="destination"]');
-  replaceSelectOptions(destination, destinations.map((value) => ({ value: value.address, label: value.label + (value.systemAddress !== home.systemAddress ? ' — travel unavailable' : ''), disabled: value.systemAddress !== home.systemAddress })), preferredDestination);
+  replaceSelectOptions(destination, destinations.map((value) => ({ value: value.address, label: value.label })), preferredDestination);
   const selected = destinations.find((value) => value.address === destination.value);
   renderResourcePicker(row, selected, row.initialResourceIds ?? draft.resourceIds);
   delete row.initialResourceIds;
-  const travel = row.querySelector('[data-field="travel"]');
-  travel.options[0].textContent = selected?.distance === 0 ? 'Not required (same system)' : 'Auto';
-  travel.disabled = selected?.distance === 0;
-  if (selected?.distance === 0) travel.value = 'auto';
-  else if (preferredTravelMode && [...travel.options].some((option) => option.value === preferredTravelMode)) travel.value = preferredTravelMode;
+  travel.classList.toggle('same-system', travel.value === 'auto' || travel.value === 'same-system');
   writeAutomationDrafts();
   updateAssignmentControls();
 }
@@ -421,14 +426,17 @@ function createAutomationRow(draft = {}) {
     <select data-field="fleet" aria-label="Fleet"></select>
     <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option></select>
     <select data-field="home" aria-label="Home Starbase"></select>
+    <select data-field="travel" aria-label="Travel"><option value="auto">Same system</option><option value="subwarp">Subwarp</option><option value="warp">Warp</option><option value="warp-lane">Warp lane</option></select>
     <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
     <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources · 0/8</summary><div class="resource-options"></div></details>
-    <select data-field="travel" aria-label="Travel"><option value="auto">Auto</option></select>
     <button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button>
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
   replaceSelectOptions(fleet, availableFleetOptions(row, draft.fleetAddress), draft.fleetAddress);
-  replaceSelectOptions(row.querySelector('[data-field="home"]'), automationCatalog.homeStarbases.map((home) => ({ value: home.systemAddress, label: `${formatRegionCode(home.regionOwner, home.regionId, home.systemFaction ?? automationCatalog.faction)} | ${home.systemName}${home.registered ? '' : ' | registration required'}` })), draft.homeSystemAddress);
+  const selectedFleet = automationCatalog.fleets.find((candidate) => candidate.address === fleet.value);
+  replaceSelectOptions(row.querySelector('[data-field="home"]'), selectedFleet
+    ? automationCatalog.homeStarbases.map((home) => ({ value: home.systemAddress, ...formatHomeStarbaseOption(home, selectedFleet.location) }))
+    : [], draft.homeSystemAddress);
   row.initialResourceIds = draft.resourceIds ?? (draft.resourceId == null ? [] : [draft.resourceId]);
   row.querySelector('[data-field="assignment"]').value = draft.assignment || 'mining';
   for (const select of row.querySelectorAll('select')) select.addEventListener('change', () => {
