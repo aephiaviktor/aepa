@@ -36,6 +36,12 @@ export function formatRegionCode(owner: RegionAlignment, regionId: number, syste
   return `${regionId}-${prefix}`;
 }
 
+export function rankHomeStarbases<T extends { regionId: number; systemName: string; systemId: number }>(homes: readonly T[]): T[] {
+  return [...homes].sort((left, right) => left.regionId - right.regionId
+    || left.systemName.localeCompare(right.systemName)
+    || left.systemId - right.systemId);
+}
+
 export function rankMiningDestinations(input: {
   faction: FactionAlignment;
   resourceId?: number;

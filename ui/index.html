@@ -13,7 +13,7 @@
       <nav aria-label="Workspace">
         <button id="show-fleets" class="nav-item active" aria-controls="fleets-page" aria-current="page"><span>FL</span>Fleets</button>
         <button id="show-automation" class="nav-item" aria-controls="automation-page"><span>AU</span>Automation</button>
-        <button class="nav-item" disabled><span>LG</span>Activity</button>
+        <button id="show-activity" class="nav-item" aria-controls="activity-page"><span>LG</span>Activity</button>
       </nav>
       <section id="fleet-column-picker" class="column-picker" aria-labelledby="fleet-columns-title">
         <h2 id="fleet-columns-title">Fleet columns</h2>
@@ -37,7 +37,7 @@
       <section id="fleets-page" class="page-view">
       <section class="status-grid">
         <article><span>Network</span><strong id="network">C4 Testnet</strong><small id="rpc-status">Not connected</small></article>
-        <article><span>Player Profile</span><strong id="profile-status">Not configured</strong><small id="character">Character —</small></article>
+        <article><span>Player Profile</span><div class="address-line"><strong id="profile-status" class="copyable-address">Not configured</strong><button id="copy-profile-address" class="copy-address" type="button" aria-label="Copy Player Profile address" disabled>Copy</button></div><small id="character">Character —</small></article>
         <article><span>Fleets</span><strong id="fleet-count">0</strong><small id="fleet-sync-status">Waiting for first on-chain sync</small></article>
         <article><span>Automation</span><strong id="automation-mode">Preview only</strong><small id="signer-status">No signer configured; no RPC writes</small></article>
       </section>
@@ -64,6 +64,12 @@
         </form>
       </section>
       </section>
+      <section id="activity-page" class="page-view" hidden>
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">AUTOMATION ACTIVITY</p><h3>Activity</h3></div><span>Latest fleet events</span></div>
+          <div id="activity-page-list" class="automation-issue-list activity-page-list"></div>
+        </section>
+      </section>
     </main>
     <aside id="status-panel" class="status-panel" hidden aria-label="Fleet status">
       <div class="status-head"><div><p class="eyebrow">LIVE FLEET STATUS</p><h3>Status</h3></div><button id="close-status" class="icon" type="button">×</button></div>
@@ -83,6 +89,15 @@
       </form>
     </aside>
   </div>
+  <dialog id="unsaved-dialog" class="warning-dialog" aria-labelledby="unsaved-title">
+    <h2 id="unsaved-title">Unsaved Automation changes</h2>
+    <p>Your Fleet Assignment changes have not been saved. What would you like to do?</p>
+    <div class="dialog-actions">
+      <button id="keep-editing" class="secondary" type="button">Keep editing</button>
+      <button id="discard-and-leave" class="danger" type="button">Discard and leave</button>
+      <button id="save-and-leave" class="primary" type="button">Save and leave</button>
+    </div>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>

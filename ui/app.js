@@ -19,6 +19,35 @@ function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
 }
 
+async function copyAddress(button, value) {
+  if (!value) return;
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(value);
+    button.textContent = 'Copied';
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => { button.textContent = original; }, 1_200);
+}
+
+function renderFleetAddress(cell, value) {
+  const line = document.createElement('div');
+  line.className = 'address-line';
+  const text = document.createElement('span');
+  text.className = 'copyable-address';
+  text.textContent = value;
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'copy-address';
+  copy.textContent = 'Copy';
+  copy.setAttribute('aria-label', `Copy fleet address ${value}`);
+  copy.onclick = (event) => { event.stopPropagation(); void copyAddress(copy, value); };
+  line.append(text, copy);
+  cell.className = 'address';
+  cell.append(line);
+}
+
 function readVisibleColumns() {
   try { return normalizeVisibleColumns(JSON.parse(localStorage.getItem(FLEET_COLUMNS_KEY))); }
   catch { return normalizeVisibleColumns(null); }
@@ -73,9 +102,10 @@ function renderFleets(fleets) {
           bindMiningPill(pill);
         }
         cell.append(pill);
+      } else if (column.id === 'address') {
+        renderFleetAddress(cell, value);
       } else {
-        cell.textContent = column.id === 'address' ? short(value) : value;
-        if (column.id === 'address') { cell.className = 'address'; cell.title = value; }
+        cell.textContent = value;
         if (column.id === 'ships') { cell.className = 'ships'; cell.title = value; }
       }
       row.append(cell);
@@ -235,16 +265,38 @@ function restoreSavedAssignment() {
 
 function showSettings(open) { $('settings-overlay').hidden = !open; }
 
+let activePage = 'fleets';
+let pendingNavigation;
+
+function hasUnsavedAutomationChanges() {
+  const rows = [...document.querySelectorAll('.automation-fleet-row')];
+  return rows.length > 0 && !automationDraftsEqual(rows.map(readAutomationRow), savedDrafts());
+}
+
+function requestNavigation(navigate) {
+  if (activePage === 'automation' && hasUnsavedAutomationChanges()) {
+    pendingNavigation = navigate;
+    $('save-and-leave').disabled = $('save-assignment').disabled;
+    $('unsaved-dialog').showModal();
+    return;
+  }
+  navigate();
+}
+
 function setActivePage(page) {
+  activePage = page;
   const automation = page === 'automation';
-  $('fleets-page').hidden = automation;
+  const fleets = page === 'fleets';
+  const activity = page === 'activity';
+  $('fleets-page').hidden = !fleets;
   $('automation-page').hidden = !automation;
-  $('fleet-column-picker').hidden = automation;
-  $('show-fleets').classList.toggle('active', !automation);
-  $('show-automation').classList.toggle('active', automation);
-  $('show-fleets').toggleAttribute('aria-current', !automation);
-  $('show-automation').toggleAttribute('aria-current', automation);
-  $('page-title').textContent = automation ? 'Automation' : 'Fleet Control';
+  $('activity-page').hidden = !activity;
+  $('fleet-column-picker').hidden = !fleets;
+  for (const [name, control] of [['fleets', $('show-fleets')], ['automation', $('show-automation')], ['activity', $('show-activity')]]) {
+    control.classList.toggle('active', page === name);
+    control.toggleAttribute('aria-current', page === name);
+  }
+  $('page-title').textContent = automation ? 'Automation' : activity ? 'Activity' : 'Fleet Control';
 }
 
 function renderSignerStatus(status) {
@@ -306,9 +358,21 @@ function renderResourcePicker(row, destination, selectedIds = []) {
     label.innerHTML = '<input type="checkbox">';
     const input = label.querySelector('input');
     input.dataset.resourceId = String(resource.id);
+    input.dataset.available = String(resource.available);
     input.checked = selected.includes(resource.id);
+    label.classList.toggle('locked', !resource.available);
+    if (!resource.available) {
+      label.title = resource.requirement || 'Required research is not unlocked.';
+      label.setAttribute('aria-disabled', 'true');
+      input.disabled = !input.checked;
+    }
     label.append(document.createTextNode(resource.name));
-    input.addEventListener('change', () => { updateResourceCounter(row); writeAutomationDrafts(); updateAssignmentControls(); });
+    input.addEventListener('change', () => {
+      if (!resource.available && input.checked) input.checked = false;
+      updateResourceCounter(row);
+      writeAutomationDrafts();
+      updateAssignmentControls();
+    });
     host.append(label);
   }
   if (removed) {
@@ -324,7 +388,10 @@ function updateResourceCounter(row) {
   const picker = row.querySelector('.resource-picker');
   const count = picker.querySelectorAll('input:checked').length;
   picker.querySelector('summary').textContent = `Resources · ${count}/8`;
-  for (const input of picker.querySelectorAll('input')) input.disabled = !input.checked && count >= 8;
+  for (const input of picker.querySelectorAll('input')) {
+    const locked = input.dataset.available === 'false';
+    input.disabled = locked ? !input.checked : !input.checked && count >= 8;
+  }
 }
 
 function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
@@ -361,7 +428,7 @@ function createAutomationRow(draft = {}) {
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
   replaceSelectOptions(fleet, availableFleetOptions(row, draft.fleetAddress), draft.fleetAddress);
-  replaceSelectOptions(row.querySelector('[data-field="home"]'), automationCatalog.homeStarbases.map((home) => ({ value: home.systemAddress, label: `${formatRegionCode(home.regionOwner, home.regionId, home.systemFaction ?? automationCatalog.faction)} | ${home.systemName}` })), draft.homeSystemAddress);
+  replaceSelectOptions(row.querySelector('[data-field="home"]'), automationCatalog.homeStarbases.map((home) => ({ value: home.systemAddress, label: `${formatRegionCode(home.regionOwner, home.regionId, home.systemFaction ?? automationCatalog.faction)} | ${home.systemName}${home.registered ? '' : ' | registration required'}` })), draft.homeSystemAddress);
   row.initialResourceIds = draft.resourceIds ?? (draft.resourceId == null ? [] : [draft.resourceId]);
   row.querySelector('[data-field="assignment"]').value = draft.assignment || 'mining';
   for (const select of row.querySelectorAll('select')) select.addEventListener('change', () => {
@@ -390,13 +457,8 @@ function renderAutomationRows(drafts) {
   updateAssignmentControls();
 }
 
-function renderAutomationIssues(state) {
-  const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
-  const errors = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
-  const activity = state?.activity ?? [];
-  $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
-  const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
-  $('automation-issue-list').replaceChildren(...entries.map((entry) => {
+function renderActivityEntries(host, entries) {
+  host.replaceChildren(...entries.map((entry) => {
     const item = document.createElement('div');
     const isError = entry.kind === 'paused' || entry.kind === 'disabled' || /blocked|error|failed/i.test(entry.detail);
     item.className = `automation-issue${isError ? ' error' : ''}`;
@@ -408,6 +470,16 @@ function renderAutomationIssues(state) {
     item.append(name, detail);
     return item;
   }));
+}
+
+function renderAutomationIssues(state) {
+  const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
+  const errors = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
+  const activity = state?.activity ?? [];
+  $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
+  const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
+  renderActivityEntries($('automation-issue-list'), entries);
+  renderActivityEntries($('activity-page-list'), entries);
 }
 
 function syncPendingRowIndicators() {
@@ -423,11 +495,15 @@ function updateAssignmentControls() {
   const assignments = automationRuntime?.assignments ?? [];
   const rows = [...document.querySelectorAll('.automation-fleet-row')];
   const drafts = rows.map(readAutomationRow);
-  const canSave = rows.length > 0 && rows.every((row) => row.querySelector('[data-field="destination"]').value && row.querySelectorAll('[data-resource-id]:checked').length > 0);
+  const canSave = rows.length > 0 && rows.every((row) => {
+    const checked = [...row.querySelectorAll('[data-resource-id]:checked')];
+    return row.querySelector('[data-field="destination"]').value && checked.length > 0 && checked.every(input => input.dataset.available !== 'false');
+  });
   const dirty = !automationDraftsEqual(drafts, savedDrafts());
   const save = $('save-assignment');
   save.classList.toggle('dirty', canSave && dirty);
   save.disabled = !canSave || !dirty;
+  $('save-and-leave').disabled = save.disabled;
   $('automation-mode').textContent = assignments.some((assignment) => assignment.enabled) ? `LIVE — ${assignments.filter((assignment) => assignment.enabled).length} running` : assignments.some((assignment) => assignment.status === 'paused') ? 'Attention required' : 'Disabled';
 }
 
@@ -542,25 +618,28 @@ async function boot() {
   $('rpc-url').value = settings.rpcUrl;
   $('player-profile').value = settings.playerProfile;
   $('refresh-interval').value = String(settings.refreshIntervalSeconds);
-  $('profile-status').textContent = settings.playerProfile ? short(settings.playerProfile) : 'Not configured';
+  $('profile-status').textContent = settings.playerProfile || 'Not configured';
   $('profile-status').title = settings.playerProfile;
+  $('copy-profile-address').disabled = !settings.playerProfile;
   initializeColumnSelector();
   renderFleetSnapshot(fleetSnapshot);
   renderAutomationState(automation);
 }
 
-$('open-settings').onclick = () => showSettings(true);
+$('open-settings').onclick = () => requestNavigation(() => showSettings(true));
 $('show-status').onclick = () => setStatusOpen($('status-panel').hidden);
 $('close-status').onclick = () => setStatusOpen(false);
-$('show-fleets').onclick = () => setActivePage('fleets');
+$('show-fleets').onclick = () => requestNavigation(() => setActivePage('fleets'));
 $('show-automation').onclick = () => setActivePage('automation');
+$('show-activity').onclick = () => requestNavigation(() => setActivePage('activity'));
+$('copy-profile-address').onclick = () => void copyAddress($('copy-profile-address'), settings?.playerProfile);
 $('add-fleet').onclick = () => {
   const drafts = writeAutomationDrafts();
   const used = new Set(drafts.map((draft) => draft.fleetAddress));
   const next = automationCatalog.fleets.find((fleet) => !used.has(fleet.address));
   if (next) renderAutomationRows([...drafts, { fleetAddress: next.address }]);
 };
-$('save-assignment').onclick = async () => {
+async function saveAutomationChanges() {
   const button = $('save-assignment');
   button.disabled = true;
   try {
@@ -568,17 +647,41 @@ $('save-assignment').onclick = async () => {
     const state = await window.aepa.saveAutomationAssignment(drafts);
     renderAutomationState(state);
     renderAutomationRows(savedDrafts());
+    return true;
   } catch (error) {
     try { renderAutomationState(await window.aepa.getAutomationState()); } catch {}
     const item = document.createElement('div');
     item.className = 'automation-issue error';
     item.textContent = `Save blocked — ${error.message || String(error)}`;
     $('automation-issue-list').prepend(item);
+    return false;
   } finally {
     updateAssignmentControls();
   }
-};
+}
+
+$('save-assignment').onclick = () => void saveAutomationChanges();
 $('cancel-assignment').onclick = restoreSavedAssignment;
+$('keep-editing').onclick = () => { pendingNavigation = undefined; $('unsaved-dialog').close(); };
+$('discard-and-leave').onclick = () => {
+  const navigate = pendingNavigation;
+  pendingNavigation = undefined;
+  restoreSavedAssignment();
+  $('unsaved-dialog').close();
+  navigate?.();
+};
+$('save-and-leave').onclick = async () => {
+  const navigate = pendingNavigation;
+  if (!await saveAutomationChanges()) return;
+  pendingNavigation = undefined;
+  $('unsaved-dialog').close();
+  navigate?.();
+};
+window.addEventListener('beforeunload', (event) => {
+  if (!hasUnsavedAutomationChanges()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
 $('close-settings').onclick = () => showSettings(false);
 $('settings-overlay').onclick = (event) => { if (event.target === $('settings-overlay')) showSettings(false); };
 $('store-signer').onclick = async () => {
@@ -623,8 +726,9 @@ $('settings-form').onsubmit = async (event) => {
   $('save-state').textContent = 'Saving…';
   try {
     settings = await window.aepa.saveSettings({ network: 'zink-ptr', rpcUrl: $('rpc-url').value, playerProfile: $('player-profile').value, refreshIntervalSeconds: Number($('refresh-interval').value) });
-    $('profile-status').textContent = settings.playerProfile ? short(settings.playerProfile) : 'Not configured';
+    $('profile-status').textContent = settings.playerProfile || 'Not configured';
     $('profile-status').title = settings.playerProfile;
+    $('copy-profile-address').disabled = !settings.playerProfile;
     $('character').textContent = 'Character —';
     renderSignerStatus((await window.aepa.bootstrap()).signer);
     $('save-state').textContent = 'Saved locally in SQLite';

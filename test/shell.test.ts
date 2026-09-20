@@ -149,3 +149,27 @@ test('mining tooltips use per-fleet multi-resource progress without Estimated', 
   assert.match(main, /copperLoops/);
   assert.match(c4, /expectedResources/);
 });
+
+test('Automation warns before navigation when assignment changes are unsaved', async () => {
+  const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  assert.match(html, /id="unsaved-dialog"/);
+  assert.match(html, /Save and leave/);
+  assert.match(html, /Discard and leave/);
+  assert.match(html, /Keep editing/);
+  assert.match(html, /id="show-activity"/);
+  assert.match(script, /requestNavigation/);
+  assert.match(script, /beforeunload/);
+});
+
+test('Fleet and Player Profile addresses are full, selectable, and copyable', async () => {
+  const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
+  assert.match(html, /id="profile-status"[^>]*class="[^"]*copyable-address/);
+  assert.match(html, /id="copy-profile-address"/);
+  assert.match(script, /renderFleetAddress/);
+  assert.match(script, /navigator\.clipboard\.writeText/);
+  assert.doesNotMatch(script, /column\.id === 'address' \? short\(value\)/);
+  assert.match(styles, /user-select:\s*text/);
+});

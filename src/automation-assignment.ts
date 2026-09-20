@@ -1,4 +1,5 @@
 import type { MiningAutomationCatalog } from './automation-catalog.js';
+import { assertMiningResourcesAvailable } from './mining-research.js';
 
 export interface AutomationAssignmentInput {
   fleetAddress: string;
@@ -52,7 +53,7 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   if (!fleet) throw new Error('Select a fleet from the current C4 catalog');
   if (input.assignment !== 'mining') throw new Error('Automatic execution currently supports only Mining');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
-  if (!home) throw new Error('Select a Home Starbase owned by the configured Character');
+  if (!home) throw new Error('Select a Home Starbase in the configured faction');
   const ids = input.resourceIds ?? [input.resourceId];
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > 8 || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id))) throw new Error('Select one to eight unique resources');
   const resources = ids.map(id => {
@@ -63,6 +64,7 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   const resource = resources[0];
   const destination = catalog.destinations.find((candidate) => candidate.address === input.destinationAddress);
   if (!destination || !resources.every(resource => destination.resourceIds.includes(resource.id))) throw new Error(`${resource.name} is not available at the selected mining destination`);
+  assertMiningResourcesAvailable(resources.map(resource => resource.id), catalog.resources);
   if (destination.systemAddress !== home.systemAddress) {
     throw new Error('Automatic cross-system travel is not available yet; select a mining destination in the Home Starbase system');
   }

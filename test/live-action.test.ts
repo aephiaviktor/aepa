@@ -5,6 +5,7 @@ import { assertAuthorizedCopperStep } from '../src/c4.js';
 const authority = '5sHs3Gjw43Csi9WN582iqoHUZrVZE8LhyJ7xqtcoQFCw';
 
 test('accepts only the exact authorized MF-01 action and authority', () => {
+  assert.doesNotThrow(() => assertAuthorizedCopperStep('register-starbase', { fleet: 'MF-01', action: 'register-starbase', authority }));
   assert.doesNotThrow(() => assertAuthorizedCopperStep('unload', { fleet: 'MF-01', action: 'unload', authority }));
   assert.doesNotThrow(() => assertAuthorizedCopperStep('load', { fleet: 'MF-01', action: 'load', authority }));
   assert.doesNotThrow(() => assertAuthorizedCopperStep('undock', { fleet: 'MF-01', action: 'undock', authority }));

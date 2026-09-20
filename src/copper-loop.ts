@@ -34,6 +34,10 @@ function deficit(target: bigint, current: bigint): bigint {
   return target > current ? target - current : 0n;
 }
 
+export function requireStarbaseRegistration(next: { kind: string }, registered: boolean): boolean {
+  return !registered && (next.kind === 'unload' || next.kind === 'load');
+}
+
 export function decideCopperLoopNextStep(input: CopperLoopDecisionInput): CopperLoopNextStep {
   const quantities = [input.foodRaw, input.targetFoodRaw, input.copperRaw, input.ammoRaw, input.ammoTargetRaw, input.fuelRaw, input.fuelTargetRaw];
   if (quantities.some((value) => value < 0n)) return { kind: 'blocked', reason: 'Inventory values must not be negative.' };

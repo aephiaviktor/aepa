@@ -1,6 +1,7 @@
 import {
   executeAuthorizedDockOnce,
   executeAuthorizedLoadOnce,
+  executeAuthorizedRegisterStarbaseOnce,
   executeAuthorizedStartMiningOnce,
   executeAuthorizedStopMiningOnce,
   executeAuthorizedUndockOnce,
@@ -51,6 +52,7 @@ type ProgressCallback = (stage: string, details?: Readonly<Record<string, string
 type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback, fleetName?: string, fleetAddress?: string, scope?: MiningLoopScope) => Promise<LiveCopperStepResult>;
 
 const ACTION_EXECUTORS: Readonly<Record<AuthorizedLiveAction, ActionExecutor>> = {
+  'register-starbase': executeAuthorizedRegisterStarbaseOnce,
   dock: executeAuthorizedDockOnce,
   unload: executeAuthorizedUnloadOnce,
   load: executeAuthorizedLoadOnce,

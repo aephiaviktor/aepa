@@ -1,10 +1,12 @@
 import { createSageClient, resolveCargo } from '@aephia/atlas-kit';
 import { profileFaction } from '@aephia/atlas-kit/bindings';
 import { getTerritoryRegions } from '@aephia/atlas-kit/factions';
+import { getResearchCatalog } from '@aephia/atlas-kit/identity';
 import { getAsteroids } from '@aephia/atlas-kit/world';
 import { address, createSolanaRpc, getAddressEncoder, getBytesEncoder, getProgramDerivedAddress } from '@solana/kit';
 import type { AppSettings } from './settings.js';
-import type { FactionAlignment, MiningDestinationCandidate, RegionAlignment } from './automation-options.js';
+import { rankHomeStarbases, type FactionAlignment, type MiningDestinationCandidate, type RegionAlignment } from './automation-options.js';
+import { resolveMiningResourceEligibility } from './mining-research.js';
 
 const READ_OPTIONS = { commitment: 'confirmed', policy: 'no-store' } as const;
 
@@ -19,8 +21,9 @@ export interface MiningAutomationCatalog {
     regionOwner: RegionAlignment;
     systemFaction?: FactionAlignment;
     coordinates: { x: number; y: number };
+    registered: boolean;
   }[];
-  resources: readonly { id: number; name: string }[];
+  resources: readonly { id: number; name: string; available: boolean; requirement?: string }[];
   destinations: readonly MiningDestinationCandidate[];
   mode: 'configuration-preview';
 }
@@ -68,11 +71,12 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
   const sage = createSageClient({ cluster: 'zink-ptr', rpc });
   try {
     const profile = address(settings.playerProfile);
-    const [faction, character, territory, systems] = await Promise.all([
+    const [faction, character, territory, systems, research] = await Promise.all([
       loadProfileFaction(rpc, profile),
       sage.characters.forProfile(profile, READ_OPTIONS),
       getTerritoryRegions(sage.context, READ_OPTIONS),
       sage.systems.all(READ_OPTIONS),
+      getResearchCatalog(sage.context),
     ]);
     const [fleets, playerStarbases] = await Promise.all([
       character.fleets.all(READ_OPTIONS),
@@ -85,7 +89,6 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
         regionBySystemId.set(system.systemId, { regionId: region.id, regionOwner: region.owner, systemFaction: system.faction });
       }
     }
-    const systemByAddress = new Map(systems.map((system) => [system.address, system]));
     const eligibleSystems = systems.filter((system) => regionBySystemId.get(system.systemId)?.systemFaction === faction);
     const asteroidGroups = await mapWithConcurrency(eligibleSystems, 4, async (system) => ({
       system,
@@ -107,11 +110,15 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
       }));
     });
     const resourceIds = [...new Set(destinations.flatMap((destination) => destination.resourceIds))].sort((left, right) => left - right);
-    const resources = await mapWithConcurrency(resourceIds, 4, async (id) => ({ id, name: (await resolveCargo(sage.context, id)).name }));
-    const homeStarbases = playerStarbases.flatMap((starbase) => {
-      const system = systemByAddress.get(starbase.system.address);
-      const territorySystem = system && regionBySystemId.get(system.systemId);
-      return system && territorySystem ? [{
+    const resources = await mapWithConcurrency(resourceIds, 4, async (id) => ({
+      id,
+      name: (await resolveCargo(sage.context, id)).name,
+      ...resolveMiningResourceEligibility(id, character, research.nodes),
+    }));
+    const registeredSystems = new Set(playerStarbases.map(starbase => String(starbase.system.address)));
+    const homeStarbases = rankHomeStarbases(eligibleSystems.flatMap((system) => {
+      const territorySystem = regionBySystemId.get(system.systemId);
+      return system.starbase && territorySystem ? [{
         systemAddress: system.address,
         systemId: system.systemId,
         systemName: system.name,
@@ -119,8 +126,9 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
         regionOwner: territorySystem.regionOwner,
         systemFaction: territorySystem.systemFaction,
         coordinates: system.coordinates,
+        registered: registeredSystems.has(String(system.address)),
       }] : [];
-    }).sort((left, right) => left.systemName.localeCompare(right.systemName));
+    }));
     return {
       faction,
       fleets: fleets.map((fleet) => ({ address: fleet.address, name: fleet.name, state: fleet.state.kind })),

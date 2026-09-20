@@ -2,13 +2,16 @@ import { createSageClient, resolveCargo, type FleetView } from '@aephia/atlas-ki
 import { getStarbasePlayerForCharacterAtSystem } from '@aephia/atlas-kit/starbases';
 import { planFleetTransferCargoAtStarbase } from '@aephia/atlas-kit/cargo/actions';
 import { planFleetDock, planFleetUndock } from '@aephia/atlas-kit/fleets/actions';
+import { getResearchCatalog } from '@aephia/atlas-kit/identity';
 import { planFleetStopMining } from '@aephia/atlas-kit/mining/actions';
 import { assemblePlan, createPlan, simulatePlan, type Plan } from '@aephia/atlas-kit/planning';
+import { planRegisterStarbasePlayer } from '@aephia/atlas-kit/starbases/actions';
 import { SAGE_PROGRAM_ADDRESS, getTransferCargoToFleetInstructionDataEncoder } from '@staratlas/dev-sage';
 import { AccountRole, address, createSolanaRpc, type AccountMeta, type Instruction, type ReadonlyUint8Array, type Signature } from '@solana/kit';
-import { decideCopperLoopNextStep } from './copper-loop.js';
+import { decideCopperLoopNextStep, requireStarbaseRegistration, type CopperLoopNextStep } from './copper-loop.js';
 import type { FleetRecord } from './database.js';
 import { calculateMultiResourceFoodPlan, type Rational } from './mining-food.js';
+import { assertMiningResourcesAvailable, resolveMiningResourceEligibility } from './mining-research.js';
 import { appendStopMiningCareerXp, planStartMiningResource, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
@@ -173,7 +176,9 @@ export function calculateServiceBundleAmounts(input: {
   };
 }
 
-export type AuthorizedLiveAction = 'dock' | 'unload' | 'load' | 'undock' | 'start-mining' | 'stop-mining';
+export type AuthorizedLiveAction = 'register-starbase' | 'dock' | 'unload' | 'load' | 'undock' | 'start-mining' | 'stop-mining';
+
+type AutomaticMiningDecision = CopperLoopNextStep | { kind: 'register-starbase' };
 
 export interface LiveCopperStepResult {
   fleet: string;
@@ -353,10 +358,11 @@ async function planForDecision(
   home: Awaited<ReturnType<ReturnType<typeof createSageClient>['systems']['byId']>>,
   asteroid: Awaited<ReturnType<Awaited<ReturnType<ReturnType<typeof createSageClient>['systems']['byId']>>['asteroids']['all']>>[number],
   authorization: { profile: ReturnType<typeof address>; authority: ReturnType<typeof address>; keyIndex: number },
-  decision: ReturnType<typeof decideCopperLoopNextStep>,
+  decision: AutomaticMiningDecision,
   rpcUrl: string,
   scope: MiningLoopScope,
 ): Promise<Plan> {
+  if (decision.kind === 'register-starbase') return planRegisterStarbasePlayer(sage.context, character, home, { funder: authorization.authority });
   if (decision.kind === 'dock') return planFleetDock(sage.context, fleet, { authorization });
   if (decision.kind === 'undock') return planFleetUndock(sage.context, fleet, { authorization });
   if (decision.kind === 'unload') {
@@ -370,7 +376,15 @@ async function planForDecision(
     return planMiningCargoLoad(sage, fleet, character, authorization, decision, scope);
   }
   if (decision.kind === 'start-mining') {
-    return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: scope.resourceIds ?? [scope.resourceId], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
+    const ids = scope.resourceIds ?? [scope.resourceId];
+    const research = await getResearchCatalog(sage.context);
+    const resources = await Promise.all(ids.map(async id => ({
+      id,
+      name: (await resolveCargo(sage.context, id)).name,
+      ...resolveMiningResourceEligibility(id, character, research.nodes),
+    })));
+    assertMiningResourcesAvailable(ids, resources);
+    return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: ids, fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
   }
   if (decision.kind === 'stop-mining') {
     const [careerXp, guardedStopPlan]: [StopMiningCareerXpAccounts, Plan] = await Promise.all([
@@ -426,7 +440,7 @@ async function observeMiningLoop(
   const preview = await buildMiningLoopPreview(sage, fleet, scope);
   const key = activeProfileKey(profile);
   const authorization = { profile: profileAddress, authority: key.authority, keyIndex: key.keyIndex };
-  const automaticDecision = decideCopperLoopNextStep({
+  const baseDecision = decideCopperLoopNextStep({
     state: fleet.state,
     atEternity: home.coordinates.x === fleet.location.x && home.coordinates.y === fleet.location.y,
     fleetName: fleet.name,
@@ -440,6 +454,12 @@ async function observeMiningLoop(
     fuelTargetRaw: fleet.capacities.fuel.total,
     targetStopAtUnixSeconds,
   });
+  let automaticDecision: AutomaticMiningDecision = baseDecision;
+  if (baseDecision.kind === 'unload' || baseDecision.kind === 'load') {
+    const starbases = await character.starbases.all({ commitment: 'confirmed', policy: 'no-store' });
+    const registered = starbases.some(starbase => starbase.system.address === home.address);
+    if (requireStarbaseRegistration(baseDecision, registered)) automaticDecision = { kind: 'register-starbase' };
+  }
   return { decision: automaticDecision, fleet, key, character, home, asteroid, authorization, preview };
 }
 
@@ -679,7 +699,7 @@ export async function simulateNextCopperStepSigned(settings: AppSettings, secret
 
 /** Reads fresh chain state without signing or sending. */
 export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint, fleetName = 'MF-01', fleetAddress?: string, scope: MiningLoopScope = DEFAULT_MINING_SCOPE): Promise<{
-  decision: ReturnType<typeof decideCopperLoopNextStep>;
+  decision: AutomaticMiningDecision;
   targetMiningSeconds: bigint;
 }> {
   if (!settings.playerProfile) throw new Error('Configure a Player Profile before inspecting automation');
@@ -787,6 +807,17 @@ async function executeAuthorizedCopperStepOnce(
   } finally {
     await sage.dispose();
   }
+}
+
+export function executeAuthorizedRegisterStarbaseOnce(
+  settings: AppSettings,
+  secretKey: Uint8Array,
+  onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
+): Promise<LiveCopperStepResult> {
+  return executeAuthorizedCopperStepOnce(settings, secretKey, 'register-starbase', onProgress, fleetName, fleetAddress, scope);
 }
 
 export function executeAuthorizedDockOnce(

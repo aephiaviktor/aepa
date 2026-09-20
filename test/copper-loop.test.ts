@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { decideCopperLoopNextStep } from '../src/copper-loop.js';
+import { decideCopperLoopNextStep, requireStarbaseRegistration } from '../src/copper-loop.js';
 
 const ready = {
   atEternity: true,
@@ -46,4 +46,11 @@ test('blocks unknown location and unsupported states', () => {
   assert.equal(unsupported.kind, 'blocked');
   if (location.kind === 'blocked') assert.match(location.reason, /Eternity/);
   if (unsupported.kind === 'blocked') assert.match(unsupported.reason, /Unsupported/);
+});
+
+test('registration is inserted before docked cargo service at a new home starbase', () => {
+  assert.equal(requireStarbaseRegistration({ kind: 'unload' }, false), true);
+  assert.equal(requireStarbaseRegistration({ kind: 'load' }, false), true);
+  assert.equal(requireStarbaseRegistration({ kind: 'undock' }, false), false);
+  assert.equal(requireStarbaseRegistration({ kind: 'load' }, true), false);
 });

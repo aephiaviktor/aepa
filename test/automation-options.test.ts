@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatRegionCode, rankMiningDestinations } from '../src/automation-options.js';
+import { formatRegionCode, rankHomeStarbases, rankMiningDestinations } from '../src/automation-options.js';
 
 test('formats live region ownership with the agreed compact labels', () => {
   assert.equal(formatRegionCode('ustur', 1), '1-US');
@@ -39,4 +39,14 @@ test('destination-first lists all resources and sorts on precise distance', () =
     { ...base, address: 'near', coordinates: { x: 1.001, y: 0 } },
   ] });
   assert.deepEqual(rows.map(row => row.address), ['near', 'far']);
+});
+
+test('home starbases sort by numeric sector before name', () => {
+  const homes = rankHomeStarbases([
+    { systemAddress: 'z', systemId: 90, systemName: 'Zeta', regionId: 23 },
+    { systemAddress: 'b', systemId: 11, systemName: 'Beta', regionId: 2 },
+    { systemAddress: 'a', systemId: 10, systemName: 'Alpha', regionId: 2 },
+    { systemAddress: 'c', systemId: 5, systemName: 'Core', regionId: 1 },
+  ]);
+  assert.deepEqual(homes.map(home => home.systemAddress), ['c', 'a', 'b', 'z']);
 });
