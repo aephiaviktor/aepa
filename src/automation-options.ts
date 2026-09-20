@@ -30,26 +30,27 @@ const REGION_PREFIX: Readonly<Record<RegionAlignment, string>> = {
   ustur: 'US',
 };
 
-export function formatRegionCode(owner: RegionAlignment, regionId: number): string {
+export function formatRegionCode(owner: RegionAlignment, regionId: number, systemFaction: FactionAlignment = 'ustur'): string {
   if (!Number.isSafeInteger(regionId) || regionId < 1) throw new RangeError('Region id must be a positive integer');
-  return `${REGION_PREFIX[owner]}-${regionId}`;
+  const prefix = owner === 'unaligned' ? ({ mud: 'MN', oni: 'ON', ustur: 'UN' } as const)[systemFaction] : REGION_PREFIX[owner];
+  return `${regionId}-${prefix}`;
 }
 
 export function rankMiningDestinations(input: {
   faction: FactionAlignment;
-  resourceId: number;
+  resourceId?: number;
   home: Coordinates;
   destinations: readonly MiningDestinationCandidate[];
 }): RankedMiningDestination[] {
   return input.destinations
-    .filter((destination) => destination.systemFaction === input.faction && destination.resourceIds.includes(input.resourceId))
+    .filter((destination) => destination.systemFaction === input.faction && (input.resourceId === undefined || destination.resourceIds.includes(input.resourceId)))
     .map((destination) => {
       const distance = Math.hypot(destination.coordinates.x - input.home.x, destination.coordinates.y - input.home.y);
       const displayDistance = Number(distance.toFixed(2));
       return {
         ...destination,
-        distance: displayDistance,
-        label: `${formatRegionCode(destination.regionOwner, destination.regionId)} | ${destination.systemName} | ${destination.name} | ${displayDistance}`,
+        distance,
+        label: `${formatRegionCode(destination.regionOwner, destination.regionId, destination.systemFaction)} | ${destination.systemName} | ${destination.name} | ${displayDistance}`,
       };
     })
     .sort((left, right) => left.distance - right.distance

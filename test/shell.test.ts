@@ -121,3 +121,10 @@ test('shell drops the zero-reserve preview and the manual simulation controls', 
   assert.match(script, /estimateCurrentCopper/);
   assert.match(script, /miningPillContent/);
 });
+
+test('destination precedes checkbox resource picker with eight-resource counter', async () => {
+  const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
+  assert.match(source, /type="checkbox"/);
+  assert.match(source, /\/8/);
+  assert.ok(source.indexOf('aria-label="Mining Destination"') < source.indexOf('aria-label="Resources"'));
+});

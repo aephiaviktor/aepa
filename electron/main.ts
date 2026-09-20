@@ -130,6 +130,7 @@ app.whenReady().then(() => {
       homeSystemId: value.homeSystemId,
       homeSystemName: value.homeSystemName,
       resourceId: value.resourceId,
+      resourceIds: value.resourceIds,
       resourceName: value.resourceName,
       destinationAddress: value.destinationAddress,
       destinationName: value.destinationName,

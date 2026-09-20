@@ -192,6 +192,10 @@ export class AepaDatabase {
         COMMIT;
       `);
     }
+    if (version < 6) {
+      this.db.exec(`BEGIN; ALTER TABLE automation_assignment ADD COLUMN resource_ids_json TEXT;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime('now')); COMMIT;`);
+    }
   }
 
   getSettings(): AppSettings {
@@ -414,7 +418,7 @@ export class AepaDatabase {
       }
       for (const value of values) {
         const existing = current.get(value.fleetAddress);
-        const unchanged = existing && Object.entries(value).every(([key, field]) => existing[key as keyof SavedAutomationAssignment] === field);
+        const unchanged = existing && Object.entries(value).every(([key, field]) => JSON.stringify(existing[key as keyof SavedAutomationAssignment]) === JSON.stringify(field));
         if (unchanged) {
           if (existing.pendingAssignment) queue.run(null, now, value.fleetAddress);
           continue;
@@ -426,6 +430,7 @@ export class AepaDatabase {
         insert.run(value.profile, value.fleetAddress, value.fleetName, value.assignment, value.homeSystemAddress,
           value.homeSystemId, value.homeSystemName, value.resourceId, value.resourceName,
           value.destinationAddress, value.destinationName, value.travelMode, now);
+        this.db.prepare('UPDATE automation_assignment SET resource_ids_json = ? WHERE fleet_address = ?').run(JSON.stringify(value.resourceIds ?? [value.resourceId]), value.fleetAddress);
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -435,9 +440,9 @@ export class AepaDatabase {
     return this.listAutomationAssignments();
   }
 
-  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null }): AutomationAssignmentRecord {
-    const { targetStopAtUnixSeconds, pendingJson, ...rest } = row;
-    return { ...rest, enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }) };
+  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null }): AutomationAssignmentRecord {
+    const { targetStopAtUnixSeconds, pendingJson, resourceIdsJson, ...rest } = row;
+    return { ...rest, resourceIds: resourceIdsJson === null ? [row.resourceId] : JSON.parse(resourceIdsJson), enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }) };
   }
 
   listAutomationAssignments(): AutomationAssignmentRecord[] {
@@ -449,9 +454,9 @@ export class AepaDatabase {
              travel_mode AS travelMode, enabled, status,
              target_stop_at_unix_seconds AS targetStopAtUnixSeconds,
              last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt,
-             pending_json AS pendingJson
+             pending_json AS pendingJson, resource_ids_json AS resourceIdsJson
       FROM automation_assignment ORDER BY fleet_name COLLATE NOCASE, fleet_address
-    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null }>;
+    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null }>;
     return rows.map((row) => this.mapAutomationAssignment(row));
   }
 
@@ -468,10 +473,10 @@ export class AepaDatabase {
     const result = this.db.prepare(`UPDATE automation_assignment SET
       profile=?, fleet_name=?, assignment=?, home_system_address=?, home_system_id=?, home_system_name=?,
       resource_id=?, resource_name=?, destination_address=?, destination_name=?, travel_mode=?,
-      pending_json=NULL, last_action=NULL, last_error=NULL, updated_at=? WHERE fleet_address=?`).run(
+      resource_ids_json=?, pending_json=NULL, last_action=NULL, last_error=NULL, updated_at=? WHERE fleet_address=?`).run(
       value.profile, value.fleetName, value.assignment, value.homeSystemAddress, value.homeSystemId,
       value.homeSystemName, value.resourceId, value.resourceName, value.destinationAddress,
-      value.destinationName, value.travelMode, new Date().toISOString(), fleetAddress,
+      value.destinationName, value.travelMode, JSON.stringify(value.resourceIds ?? [value.resourceId]), new Date().toISOString(), fleetAddress,
     );
     if (result.changes !== 1) throw new Error('Automation assignment disappeared while applying its pending update');
     return this.getAutomationAssignment(fleetAddress)!;

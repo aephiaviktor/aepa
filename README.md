@@ -44,9 +44,12 @@ current state in real time, updated from the cached snapshot without extra
 writes. Every automatic transaction must pass the signed pre-send simulation
 gate before AEPA broadcasts it.
 
-Other resources, destinations, and inter-system travel may be explored in the
-configuration UI, but the trusted main process rejects them for automatic
-execution until their transaction paths are implemented and tested.
+Each assignment selects its Home Starbase, then a same-faction asteroid belt
+ranked by distance, followed by one to eight resources available at that belt.
+The mining rate is shared equally across the selected resources; AEPA uses the
+combined weighted cargo rate when calculating Food and its durable stop time.
+Automatic inter-system travel is not implemented, so those destinations remain
+visible but disabled until their movement paths are implemented and tested.
 
 ## SQLite and on-chain authority
 

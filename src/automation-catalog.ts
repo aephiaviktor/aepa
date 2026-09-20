@@ -17,6 +17,7 @@ export interface MiningAutomationCatalog {
     systemName: string;
     regionId: number;
     regionOwner: RegionAlignment;
+    systemFaction?: FactionAlignment;
     coordinates: { x: number; y: number };
   }[];
   resources: readonly { id: number; name: string }[];
@@ -116,6 +117,7 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
         systemName: system.name,
         regionId: territorySystem.regionId,
         regionOwner: territorySystem.regionOwner,
+        systemFaction: territorySystem.systemFaction,
         coordinates: system.coordinates,
       }] : [];
     }).sort((left, right) => left.systemName.localeCompare(right.systemName));

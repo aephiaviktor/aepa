@@ -59,9 +59,9 @@ function instruction(accounts: AccountMeta[], data: ReadonlyUint8Array): Instruc
 
 export function planStartMiningResource(input: StartMiningPlanInput): Plan {
   validateAuthorization(input.authorization);
-  const resources = [...input.resourceIds];
-  if (resources.length !== 1 || !Number.isSafeInteger(resources[0]) || resources[0] < 0 || resources[0] > 65_535) {
-    throw new RangeError('AEPA mining requires exactly one valid cargo resource id');
+  const resources = [...input.resourceIds].sort((a, b) => a - b);
+  if (resources.length < 1 || resources.length > 8 || new Set(resources).size !== resources.length || resources.some(id => !Number.isSafeInteger(id) || id < 0 || id > 65_535)) {
+    throw new RangeError('AEPA mining requires one to eight unique valid cargo resource ids');
   }
   const ix = instruction([
     readonlySigner(input.authorization.authority),

@@ -8,7 +8,7 @@ import { SAGE_PROGRAM_ADDRESS, getTransferCargoToFleetInstructionDataEncoder } f
 import { AccountRole, address, createSolanaRpc, type AccountMeta, type Instruction, type ReadonlyUint8Array, type Signature } from '@solana/kit';
 import { decideCopperLoopNextStep } from './copper-loop.js';
 import type { FleetRecord } from './database.js';
-import { calculateMiningFoodPlan, type Rational } from './mining-food.js';
+import { calculateMultiResourceFoodPlan, type Rational } from './mining-food.js';
 import { appendStopMiningCareerXp, planStartMiningResource, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
@@ -75,6 +75,7 @@ export interface MiningLoopScope {
   homeSystemId: number;
   homeSystemName: string;
   resourceId: number;
+  resourceIds?: readonly number[];
   resourceName: string;
   destinationAddress: string;
   destinationName: string;
@@ -206,23 +207,22 @@ async function buildMiningLoopPreview(sage: ReturnType<typeof createSageClient>,
   const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
   const asteroid = asteroids.find((candidate) => String(candidate.address) === scope.destinationAddress);
   if (!asteroid) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
-  const resourceDefinition = asteroid.details.resources.find((resource) => resource.cargoId === scope.resourceId);
-  if (!resourceDefinition) throw new Error(`${scope.resourceName} is not available at ${scope.destinationName}`);
-  const [resourceCargo, food] = await Promise.all([resolveCargo(sage.context, scope.resourceId), resolveCargo(sage.context, 1)]);
-  if (resourceCargo.name !== scope.resourceName) throw new Error(`Cargo id ${scope.resourceId} is ${resourceCargo.name}, not ${scope.resourceName}`);
-
+  const ids = scope.resourceIds ?? [scope.resourceId];
+  const resourceCargo = await Promise.all(ids.map(id => resolveCargo(sage.context, id)));
+  const food = await resolveCargo(sage.context, 1);
+  const resources = resourceCargo.map(cargo => {
+    const definition = asteroid.details.resources.find(resource => resource.cargoId === cargo.id);
+    if (!definition) throw new Error(`${cargo.name} is not available at ${scope.destinationName}`);
+    return { id: cargo.id, richness: { numerator: definition.richness.raw, denominator: RICHNESS_SCALE },
+      storagePerUnit: { numerator: BigInt(cargo.storageCost), denominator: CARGO_STORAGE_SCALE } };
+  });
   const preservedCargoStorageRaw = fleet.cargoHold.items
-    .filter((item) => item.id !== food.id && item.id !== resourceCargo.id)
+    .filter(item => item.id !== food.id && !ids.includes(item.id))
     .reduce((total, item) => total + (item.amount * BigInt(item.storageCost) + CARGO_STORAGE_SCALE - 1n) / CARGO_STORAGE_SCALE, 0n);
-  const plan = calculateMiningFoodPlan({
-    cargoCapacityRaw: fleet.capacities.cargo.total,
-    preservedCargoStorageRaw,
-    copperStoragePerUnit: { numerator: BigInt(resourceCargo.storageCost), denominator: CARGO_STORAGE_SCALE },
+  const plan = calculateMultiResourceFoodPlan({
+    cargoCapacityRaw: fleet.capacities.cargo.total, preservedCargoStorageRaw, resources,
+    fleetUnitsPerSecond: { numerator: fleet.stats.cargo.miningRate.raw, denominator: FLEET_RATE_SCALE },
     foodStoragePerUnit: { numerator: BigInt(food.storageCost), denominator: CARGO_STORAGE_SCALE },
-    copperUnitsPerSecond: {
-      numerator: fleet.stats.cargo.miningRate.raw * resourceDefinition.richness.raw,
-      denominator: FLEET_RATE_SCALE * RICHNESS_SCALE,
-    },
     foodUnitsPerSecond: { numerator: fleet.stats.cargo.foodConsumptionRate.raw, denominator: FLEET_RATE_SCALE },
     ammoAmountRaw: fleet.capacities.ammo.total,
     ammoUnitsPerSecond: { numerator: fleet.stats.cargo.ammoConsumptionRate.raw, denominator: FLEET_RATE_SCALE },
@@ -233,7 +233,7 @@ async function buildMiningLoopPreview(sage: ReturnType<typeof createSageClient>,
     homeSystem: home.name,
     asteroid: asteroid.name,
     sameSystem,
-    resource: resourceCargo.name,
+    resource: resourceCargo.map(cargo => cargo.name).join(', '),
     limitingEvent: plan.limitingEvent,
     foodForCargoRaw: plan.foodForCargoRaw.toString(),
     foodForAmmoRaw: plan.foodForAmmoRaw.toString(),
@@ -353,7 +353,7 @@ async function planForDecision(
   if (decision.kind === 'undock') return planFleetUndock(sage.context, fleet, { authorization });
   if (decision.kind === 'unload') {
     const cargoHold = [
-      ...(decision.copperRaw > 0n ? [{ cargoId: scope.resourceId, amount: decision.copperRaw }] : []),
+      ...(scope.resourceIds ?? [scope.resourceId]).map(cargoId => ({ cargoId, amount: cargoAmount(fleet, cargoId) })).filter(item => item.amount > 0n),
       ...(decision.foodRaw > 0n ? [{ cargoId: 1, amount: decision.foodRaw }] : []),
     ];
     return planFleetTransferCargoAtStarbase(sage.context, fleet, { authorization, direction: 'toStarbase', amounts: { cargoHold } });
@@ -362,7 +362,7 @@ async function planForDecision(
     return planMiningCargoLoad(sage, fleet, character, authorization, decision, scope);
   }
   if (decision.kind === 'start-mining') {
-    return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: [scope.resourceId], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
+    return planStartMiningResource({ authorization, fleet: fleet.address, character: character.address, system: home.address, regionTracker: REGION_TRACKER, asteroid: asteroid.address, game: fleet.game, resourceIds: scope.resourceIds ?? [scope.resourceId], fleetName: fleet.name, asteroidName: asteroid.name, resourceName: scope.resourceName });
   }
   if (decision.kind === 'stop-mining') {
     const [careerXp, guardedStopPlan]: [StopMiningCareerXpAccounts, Plan] = await Promise.all([
@@ -425,7 +425,7 @@ async function observeMiningLoop(
     homeSystemName: scope.homeSystemName,
     foodRaw: cargoAmount(fleet, 1),
     targetFoodRaw: BigInt(preview.foodToLoadRaw),
-    copperRaw: cargoAmount(fleet, scope.resourceId),
+    copperRaw: (scope.resourceIds ?? [scope.resourceId]).reduce((sum, id) => sum + cargoAmount(fleet, id), 0n),
     ammoRaw: fleet.ammo.amount,
     ammoTargetRaw: fleet.capacities.ammo.total,
     fuelRaw: fleet.fuel.amount,

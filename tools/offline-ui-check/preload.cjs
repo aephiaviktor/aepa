@@ -1,0 +1,6 @@
+const {contextBridge}=require('electron');
+const resources=Array.from({length:10},(_,i)=>({id:300+i,name:`Resource ${i+1}`}));
+const base={name:'Ioki',systemAddress:'home',systemName:'Eternity',systemFaction:'ustur',coordinates:{x:0,y:0},regionId:1,regionOwner:'unaligned',resourceIds:resources.map(r=>r.id)};
+const catalog={faction:'ustur',fleets:[{address:'f',name:'MF-01',state:'idle'}],homeStarbases:[{systemAddress:'home',systemId:10,systemName:'Eternity',regionId:1,regionOwner:'unaligned',systemFaction:'ustur',coordinates:{x:0,y:0}}],resources,destinations:[{...base,address:'belt'},{...base,address:'belt2',name:'Other belt',resourceIds:[300,301]},{...base,address:'far',systemAddress:'far',coordinates:{x:1,y:0}}]};
+let state={assignments:[],activity:[]};
+contextBridge.exposeInMainWorld('aepa',{bootstrap:async()=>({version:'local-test',network:{label:'C4 Testnet'},signer:{configured:false}}),getSettings:async()=>({playerProfile:'p',rpcUrl:'https://testnet-rpc.z.ink',refreshIntervalSeconds:60}),getFleetSnapshot:async()=>({fleets:[],sync:{status:'ready'}}),getAutomationState:async()=>state,loadAutomationCatalog:async()=>catalog,saveAutomationAssignment:async rows=>{state={assignments:rows.map(r=>({...r,fleetName:'MF-01',status:'disabled'})),activity:[]};return state;}});

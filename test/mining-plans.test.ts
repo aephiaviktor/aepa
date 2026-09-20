@@ -25,7 +25,7 @@ test('start mining plan encodes the selected resource id in the generated C4 acc
 test('start mining accepts one catalog resource and rejects invalid resource lists', () => {
   const plan = planStartMiningResource({ authorization, fleet, game, asteroid, character: authorization.profile, system: authorization.profile, regionTracker: authorization.profile, resourceIds: [309], fleetName: 'MF-02', asteroidName: 'Ioki', resourceName: 'Carbon' });
   assert.deepEqual(getStartMiningAsteroidInstructionDataDecoder().decode(plan.steps[0].instruction.data!).resources, [309]);
-  assert.throws(() => planStartMiningResource({ authorization, fleet, game, asteroid, character: authorization.profile, system: authorization.profile, regionTracker: authorization.profile, resourceIds: [], fleetName: 'MF-02', asteroidName: 'Ioki', resourceName: 'Carbon' }), /exactly one/i);
+  assert.throws(() => planStartMiningResource({ authorization, fleet, game, asteroid, character: authorization.profile, system: authorization.profile, regionTracker: authorization.profile, resourceIds: [], fleetName: 'MF-02', asteroidName: 'Ioki', resourceName: 'Carbon' }), /one to eight/i);
 });
 
 test('stop mining appends Career-XP budgets while preserving Atlas Kit next safeguards', () => {
@@ -120,4 +120,12 @@ test('stop mining refuses an unguarded Plan before adding Career-XP accounts', (
     progressionConfig: fleet,
     pointsProgram: fleet,
   }), /unsupported or unguarded/);
+});
+
+test('encodes the observed four-resource start in one instruction and rejects invalid sets', () => {
+  const input = { authorization, fleet, game, asteroid, character: authorization.profile, system: authorization.profile, regionTracker: authorization.profile, resourceIds: [361,329,342,334], fleetName: 'FF-01', asteroidName: 'Ioki', resourceName: 'Four resources' };
+  const plan = planStartMiningResource(input);
+  assert.equal(plan.steps.length, 1);
+  assert.deepEqual(getStartMiningAsteroidInstructionDataDecoder().decode(plan.steps[0].instruction.data!).resources, [329,334,342,361]);
+  for (const resourceIds of [[329,329], Array.from({length: 9}, (_, i) => i), [-1]]) assert.throws(() => planStartMiningResource({ ...input, resourceIds }), /resource/i);
 });

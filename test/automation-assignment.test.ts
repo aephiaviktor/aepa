@@ -36,3 +36,11 @@ test('rejects unknown resources, mismatched destinations, and unsupported cross-
   assert.throws(() => validateSupportedAutomationAssignment({ ...input, destinationAddress: 'far', resourceId: 329 }, catalog, 'profile-1'), /cross-system/i);
   assert.throws(() => validateSupportedAutomationAssignment({ ...input, travelMode: 'warp' }, catalog, 'profile-1'), /does not use/i);
 });
+
+test('validates and sorts one to eight unique resources at the destination', () => {
+  const result = validateSupportedAutomationAssignment({ ...input, resourceIds: [329, 311] }, catalog, 'profile-1');
+  assert.deepEqual(result.resourceIds, [311, 329]);
+  for (const resourceIds of [[], [311, 311], [999], Array.from({ length: 9 }, (_, i) => i)]) {
+    assert.throws(() => validateSupportedAutomationAssignment({ ...input, resourceIds }, catalog, 'profile-1'), /resource/i);
+  }
+});

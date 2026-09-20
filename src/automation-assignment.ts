@@ -5,6 +5,7 @@ export interface AutomationAssignmentInput {
   assignment: string;
   homeSystemAddress: string;
   resourceId: number;
+  resourceIds?: number[];
   destinationAddress: string;
   travelMode: string;
 }
@@ -18,6 +19,7 @@ export interface SavedAutomationAssignment {
   homeSystemId: number;
   homeSystemName: string;
   resourceId: number;
+  resourceIds?: number[];
   resourceName: string;
   destinationAddress: string;
   destinationName: string;
@@ -51,10 +53,16 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   if (input.assignment !== 'mining') throw new Error('Automatic execution currently supports only Mining');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
   if (!home) throw new Error('Select a Home Starbase owned by the configured Character');
-  const resource = catalog.resources.find((candidate) => candidate.id === input.resourceId);
-  if (!resource) throw new Error('Select a resource from the current C4 catalog');
+  const ids = input.resourceIds ?? [input.resourceId];
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > 8 || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id))) throw new Error('Select one to eight unique resources');
+  const resources = ids.map(id => {
+    const resource = catalog.resources.find(candidate => candidate.id === id);
+    if (!resource) throw new Error('Select resources from the current C4 catalog');
+    return resource;
+  }).sort((a, b) => a.id - b.id);
+  const resource = resources[0];
   const destination = catalog.destinations.find((candidate) => candidate.address === input.destinationAddress);
-  if (!destination || !destination.resourceIds.includes(resource.id)) throw new Error(`${resource.name} is not available at the selected mining destination`);
+  if (!destination || !resources.every(resource => destination.resourceIds.includes(resource.id))) throw new Error(`${resource.name} is not available at the selected mining destination`);
   if (destination.systemAddress !== home.systemAddress) {
     throw new Error('Automatic cross-system travel is not available yet; select a mining destination in the Home Starbase system');
   }
@@ -68,7 +76,8 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
     homeSystemId: home.systemId,
     homeSystemName: home.systemName,
     resourceId: resource.id,
-    resourceName: resource.name,
+    resourceIds: resources.map(resource => resource.id),
+    resourceName: resources.map(resource => resource.name).join(', '),
     destinationAddress: destination.address,
     destinationName: destination.name,
     travelMode: 'auto',

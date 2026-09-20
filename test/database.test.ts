@@ -168,3 +168,24 @@ test('SQLite persists catalog sync metadata and keeps the last-good catalog acro
   assert.deepEqual(failed.catalog, catalog);
   database.close();
 });
+
+test('resource sets persist and equal arrays do not queue spurious edits', () => {
+  const db = new AepaDatabase(':memory:');
+  const value = { profile: 'p', fleetAddress: 'f', fleetName: 'F', assignment: 'mining' as const, homeSystemAddress: 'h', homeSystemId: 10, homeSystemName: 'H', resourceId: 329, resourceIds: [329,334,342,361], resourceName: 'Four resources', destinationAddress: 'd', destinationName: 'D', travelMode: 'auto' as const };
+  db.saveAutomationAssignment(value);
+  assert.deepEqual(db.getAutomationAssignment()?.resourceIds, value.resourceIds);
+  db.setAutomationEnabled(true);
+  db.saveAutomationAssignment({ ...value, resourceIds: [...value.resourceIds] });
+  assert.equal(db.getAutomationAssignment()?.pendingAssignment, undefined);
+  db.saveAutomationAssignment({ ...value, resourceIds: [329,334] });
+  db.applyPendingAutomationAssignment('f');
+  assert.deepEqual(db.getAutomationAssignment()?.resourceIds, [329,334]);
+  db.close();
+});
+
+test('legacy single-resource records expose a singleton resource set', () => {
+  const db = new AepaDatabase(':memory:');
+  db.saveAutomationAssignment({ profile: 'p', fleetAddress: 'f', fleetName: 'F', assignment: 'mining', homeSystemAddress: 'h', homeSystemId: 10, homeSystemName: 'H', resourceId: 311, resourceName: 'Copper Ore', destinationAddress: 'd', destinationName: 'D', travelMode: 'auto' });
+  assert.deepEqual(db.getAutomationAssignment()?.resourceIds, [311]);
+  db.close();
+});

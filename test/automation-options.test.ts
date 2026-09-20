@@ -3,10 +3,10 @@ import test from 'node:test';
 import { formatRegionCode, rankMiningDestinations } from '../src/automation-options.js';
 
 test('formats live region ownership with the agreed compact labels', () => {
-  assert.equal(formatRegionCode('ustur', 1), 'US-1');
-  assert.equal(formatRegionCode('mud', 23), 'MT-23');
-  assert.equal(formatRegionCode('oni', 8), 'OR-8');
-  assert.equal(formatRegionCode('unaligned', 9), 'UN-9');
+  assert.equal(formatRegionCode('ustur', 1), '1-US');
+  assert.equal(formatRegionCode('mud', 23), '23-MT');
+  assert.equal(formatRegionCode('oni', 8), '8-OR');
+  assert.equal(formatRegionCode('unaligned', 9), '9-UN');
 });
 
 test('filters on system faction rather than region owner and ranks by home distance', () => {
@@ -22,7 +22,21 @@ test('filters on system faction rather than region owner and ranks by home dista
     ],
   });
   assert.deepEqual(ranked.map(({ address, label, distance }) => ({ address, label, distance })), [
-    { address: 'home', label: 'US-1 | Eternity | Ioki | 0', distance: 0 },
-    { address: 'far', label: 'MT-23 | Second | Belt B | 5', distance: 5 },
+    { address: 'home', label: '1-US | Eternity | Ioki | 0', distance: 0 },
+    { address: 'far', label: '23-MT | Second | Belt B | 5', distance: 5 },
   ]);
+});
+
+test('neutral codes use system faction', () => {
+  assert.equal(formatRegionCode('unaligned', 9, 'mud'), '9-MN');
+  assert.equal(formatRegionCode('unaligned', 9, 'oni'), '9-ON');
+});
+
+test('destination-first lists all resources and sorts on precise distance', () => {
+  const base = { name: 'Belt', systemAddress: 's', systemName: 'S', systemFaction: 'ustur' as const, regionId: 1, regionOwner: 'unaligned' as const, resourceIds: [999] };
+  const rows = rankMiningDestinations({ faction: 'ustur', home: { x: 0, y: 0 }, destinations: [
+    { ...base, address: 'far', coordinates: { x: 1.004, y: 0 } },
+    { ...base, address: 'near', coordinates: { x: 1.001, y: 0 } },
+  ] });
+  assert.deepEqual(rows.map(row => row.address), ['near', 'far']);
 });

@@ -117,3 +117,38 @@ export function calculateMiningFoodPlan(input: MiningFoodInput): MiningFoodPlan 
     unavoidableFoodRoundingRaw: foodToLoadRaw - floor(exactFoodConsumed),
   };
 }
+
+export interface MultiResourceFoodInput extends Omit<MiningFoodInput, 'copperStoragePerUnit' | 'copperUnitsPerSecond'> {
+  fleetUnitsPerSecond: Rational;
+  resources: readonly { id: number; richness: Rational; storagePerUnit: Rational }[];
+}
+
+/** Split fleet effort equally; combine storage rates, not unweighted item counts.
+ * Reserve one Food storage unit for unavoidable integer consumption rounding.
+ */
+export function calculateMultiResourceFoodPlan(input: MultiResourceFoodInput) {
+  if (input.resources.length < 1 || input.resources.length > 8 || new Set(input.resources.map(r => r.id)).size !== input.resources.length) {
+    throw new RangeError('Select one to eight unique resources');
+  }
+  const fleetRate = requirePositive(input.fleetUnitsPerSecond, 'Fleet mining rate');
+  let storageRate = rational(0n, 1n);
+  const outputs = input.resources.map(resource => {
+    const rate = multiply(fleetRate, requirePositive(resource.richness, 'Resource richness'));
+    const unitsPerSecond = rational(rate.numerator, rate.denominator * BigInt(input.resources.length));
+    const storage = multiply(unitsPerSecond, requirePositive(resource.storagePerUnit, 'Resource storage'));
+    storageRate = rational(storageRate.numerator * storage.denominator + storage.numerator * storageRate.denominator, storageRate.denominator * storage.denominator);
+    return { ...resource, unitsPerSecond };
+  });
+  const roundingStorage = storageForUnits(1n, requirePositive(input.foodStoragePerUnit, 'Food storage'));
+  const plan = calculateMiningFoodPlan({ ...input, preservedCargoStorageRaw: input.preservedCargoStorageRaw + roundingStorage,
+    copperStoragePerUnit: rational(1n, 1n), copperUnitsPerSecond: storageRate });
+  const seconds = floor(plan.targetMiningSeconds);
+  if (seconds < 1n) throw new RangeError('No safe whole second of mining fits');
+  const targetMiningSeconds = rational(seconds, 1n);
+  const foodToLoadRaw = ceil(multiply(input.foodUnitsPerSecond, targetMiningSeconds));
+  const projected = outputs.map(output => ({ ...output, amountRaw: floor(multiply(output.unitsPerSecond, targetMiningSeconds)) }));
+  const totalOutputRaw = projected.reduce((sum, output) => sum + output.amountRaw, 0n);
+  const cargoStorageAtStopRaw = input.preservedCargoStorageRaw + roundingStorage + projected.reduce((sum, output) => sum + storageForUnits(output.amountRaw, output.storagePerUnit), 0n);
+  if (cargoStorageAtStopRaw > input.cargoCapacityRaw) throw new RangeError('Rounded resource cargo exceeds capacity');
+  return { ...plan, targetMiningSeconds, foodToLoadRaw, copperAtStopRaw: totalOutputRaw, cargoStorageAtStopRaw, outputs: projected };
+}
