@@ -68,3 +68,14 @@ test('durable retry claims are fair and scoped by network', () => {
   assert.ok(store.claimDue('ptr', 61000));
   store.close();
 });
+
+test('operation barrier blocks a different transaction for the same fleet but not other fleets', () => {
+  const store = new RawTransactionStore(':memory:');
+  const input={network:'ptr',resetEpoch:'one',profile:'p',signature:'a',wire:'AQ=='};
+  const id=store.beforeOperationSend(input,'fleet-a');
+  assert.throws(() => store.beforeOperationSend({...input,signature:'b'},'fleet-a'), /must not be resubmitted/);
+  store.beforeOperationSend({...input,signature:'b'},'fleet-b');
+  store.resolveOperation(id);
+  store.beforeOperationSend({...input,signature:'c'},'fleet-a');
+  store.close();
+});

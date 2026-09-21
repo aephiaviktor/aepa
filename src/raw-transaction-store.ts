@@ -32,6 +32,10 @@ export class RawTransactionStore {
         submission_id TEXT NOT NULL REFERENCES raw_submissions(id),
         digest TEXT NOT NULL, received_at TEXT NOT NULL, response_text TEXT NOT NULL,
         UNIQUE(submission_id, digest));
+      CREATE TABLE IF NOT EXISTS raw_operation_barriers(
+        network TEXT NOT NULL, profile TEXT NOT NULL, scope TEXT NOT NULL,
+        submission_id TEXT NOT NULL REFERENCES raw_submissions(id),
+        PRIMARY KEY(network,profile,scope));
       CREATE TABLE IF NOT EXISTS raw_generations(network TEXT PRIMARY KEY, generation TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS raw_retry(
         submission_id TEXT PRIMARY KEY REFERENCES raw_submissions(id),
@@ -55,6 +59,24 @@ export class RawTransactionStore {
     this.db.prepare(`INSERT INTO raw_submissions(id, network, reset_epoch, profile, signature, wire, created_at)
       VALUES(?,?,?,?,?,?,?)`).run(id, input.network, input.resetEpoch, input.profile, input.signature, input.wire, new Date().toISOString());
     return id;
+  }
+
+  beforeOperationSend(input: RawSubmission, scope: string): string {
+    if (!scope.trim()) throw new Error('Operation scope is required');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const pending = this.db.prepare('SELECT submission_id FROM raw_operation_barriers WHERE network=? AND profile=? AND scope=?')
+        .get(input.network, input.profile, scope);
+      // Even the identical wire must not be sent twice after an interrupted send.
+      if (pending) throw new Error('Unresolved transaction for this operation; it must not be resubmitted');
+      const id = this.beforeSend(input);
+      this.db.prepare('INSERT INTO raw_operation_barriers VALUES(?,?,?,?)').run(input.network,input.profile,scope,id);
+      this.db.exec('COMMIT');
+      return id;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  resolveOperation(id: string): void {
+    this.db.prepare('DELETE FROM raw_operation_barriers WHERE submission_id=?').run(id);
   }
 
   /** Caller supplies the untouched getTransaction JSON-RPC body at finalized

@@ -69,3 +69,23 @@ Positive findings: exact RPC response text preserves unknown fields/integer lexe
 wire identity check prevents unrelated metadata completing a record; pre-send write
 failure prevents sending; retry claims are durable and fair; explicit 429 handling;
 no private keys or endpoint strings are deliberately persisted.
+
+## First correction: durable per-fleet send barrier
+
+The raw recorder now atomically writes a submission and a barrier keyed by
+network/profile/fleet address. A second send for that fleet is refused while the
+barrier exists, including after runtime restart and after raw metadata is complete.
+A normal operation removes its barrier only after the existing confirmation and
+resulting-state checks succeed. Other fleets remain independent. Reset-generation
+rotation does not silently clear unresolved operations.
+
+This is deliberately not automatic recovery: a crashed/failed operation remains
+blocked until explicit reconciliation is implemented. There is no UI unlock yet,
+and metadata collection alone must not unlock an operation. A crash before the
+actual network send can also conservatively leave a barrier. Legacy raw records
+created before this correction cannot be reliably assigned to fleets. No deployed
+archive is being migrated, because this feature branch has not been deployed.
+
+Remaining before release: a safe reconciliation workflow, worker-based storage,
+health/capacity reporting, response-size controls and Windows validation. Do not
+represent this correction as completing all review findings.

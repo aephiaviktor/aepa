@@ -42,7 +42,7 @@ test('both production send sites require raw capture and Electron starts the col
   const { readFileSync } = await import('node:fs');
   const c4 = readFileSync(new URL('../../src/c4.ts', import.meta.url), 'utf8');
   const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8');
-  assert.equal((c4.match(/onProgress, rawRecorderFor\(settings\)/g) ?? []).length, 2);
+  assert.equal((c4.match(/onProgress, recorder\)/g) ?? []).length, 2);
   assert.match(main, /configureRawCapture\(rawCapture\)/);
   assert.match(main, /rawCapture\.start\(\)/);
   assert.match(main, /rotateGeneration/);
@@ -55,7 +55,7 @@ test('rate limits stop the batch and honor Retry-After on subsequent ticks', asy
     requests++;
     return new Response('', { status:429, headers:{ 'Retry-After':'120' } });
   });
-  for (const signature of ['a','b']) await runtime.recorder(settings).beforeSend({signature,wire:'AQ=='});
+  for (const signature of ['a','b']) await runtime.recorder(settings, signature).beforeSend({signature,wire:'AQ=='});
   await runtime.tick(); await runtime.tick();
   assert.equal(requests,1);
   assert.equal(store.pending().length,2);
@@ -84,4 +84,19 @@ test('fresh runtime recovers durable records without signing or resending', asyn
     assert.equal(second.pending().length,0);
     await resumed.stop(); second.close();
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('restarted runtime cannot send for an interrupted fleet even after metadata collection', async () => {
+  const store = new RawTransactionStore(':memory:');
+  const runtime = new RawCaptureRuntime(store, () => settings);
+  await runtime.recorder(settings,'fleet-a').beforeSend({signature:'sig',wire:'AQ=='});
+  await runtime.stop();
+  const restarted = new RawCaptureRuntime(store, () => settings, async () => new Response('{"result":{"transaction":["AQ==","base64"],"meta":{}}}'));
+  await restarted.tick();
+  await assert.rejects(() => restarted.recorder(settings,'fleet-a').beforeSend({signature:'new',wire:'Ag=='}), /must not be resubmitted/);
+  const other = restarted.recorder(settings,'fleet-b');
+  await other.beforeSend({signature:'other',wire:'AQ=='});
+  await other.complete();
+  await restarted.recorder(settings,'fleet-b').beforeSend({signature:'next',wire:'AQ=='});
+  await restarted.stop(); store.close();
 });

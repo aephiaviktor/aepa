@@ -2,12 +2,14 @@ import type { AppSettings } from './settings.js';
 import type { RawSendRecorder } from './signed-simulation.js';
 import type { RawTransactionStore } from './raw-transaction-store.js';
 
+export interface OperationRecorder extends RawSendRecorder { complete(): Promise<void> }
+
 type FetchRaw = (url: string, init: RequestInit) => Promise<Response>;
 let activeRuntime: RawCaptureRuntime | undefined;
 export function configureRawCapture(runtime: RawCaptureRuntime): void { activeRuntime = runtime; }
-export function rawRecorderFor(settings: AppSettings): RawSendRecorder {
+export function rawRecorderFor(settings: AppSettings, scope: string): OperationRecorder {
   if (!activeRuntime) throw new Error('Raw transaction recorder is not initialized; nothing submitted');
-  return activeRuntime.recorder(settings);
+  return activeRuntime.recorder(settings, scope);
 }
 
 /** Endpoint credentials stay in memory. Only public transaction facts enter SQLite.
@@ -25,14 +27,18 @@ export class RawCaptureRuntime {
     private readonly report: (message: string) => void = () => {},
   ) {}
 
-  recorder(settings: AppSettings): RawSendRecorder {
+  recorder(settings: AppSettings, scope = 'profile'): OperationRecorder {
     const context = { network: settings.network, profile: settings.playerProfile,
       resetEpoch: this.store.generation(settings.network) };
     let id: string | undefined;
     return {
       beforeSend: async ({ wire, signature }) => {
         if (this.stopped) throw new Error('Raw capture is stopped; nothing submitted');
-        id = this.store.beforeSend({ ...context, wire, signature });
+        id = this.store.beforeOperationSend({ ...context, wire, signature }, scope);
+      },
+      complete: async () => {
+        if (!id) throw new Error('Missing operation record');
+        this.store.resolveOperation(id);
       },
       afterSend: async outcome => {
         if (!id) throw new Error('Missing pre-send raw record');

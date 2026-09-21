@@ -575,7 +575,8 @@ export async function executeAuthorizedServiceBundleOnce(
     onProgress?.('fresh-service-verified', { fleet: prepared.fleet.name, authority: prepared.key.authority, ...stringifyServiceAmounts(prepared.amounts) });
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
     onProgress?.('transaction-assembled');
-    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, rawRecorderFor(settings));
+    const recorder = rawRecorderFor(settings, `fleet:${prepared.fleet.address}`);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, recorder);
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;
     while (Date.now() < confirmationDeadline) {
@@ -617,6 +618,7 @@ export async function executeAuthorizedServiceBundleOnce(
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (!serviceObserved) throw new Error(`Service bundle ${submission.signature} confirmed, but the exact docked serviced balances were not observed within 45 seconds`);
+    await recorder.complete();
     return {
       fleet: 'MF-01', action: 'service-bundle', summary: prepared.plan.summary,
       authority: prepared.key.authority, keyIndex: prepared.key.keyIndex,
@@ -750,7 +752,8 @@ async function executeAuthorizedCopperStepOnce(
     // and the runner pauses with the real reason instead of a doomed broadcast.
     const simulation = await signAndSimulateTransaction(rpc, transaction, secretKey, prepared.key.authority);
     onProgress?.('simulation-verified', { slot: simulation.slot.toString() });
-    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, rawRecorderFor(settings));
+    const recorder = rawRecorderFor(settings, `fleet:${prepared.fleet.address}`);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, recorder);
 
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;
@@ -795,6 +798,7 @@ async function executeAuthorizedCopperStepOnce(
       resultingNextStep = resulting.decision.kind;
     }
 
+    await recorder.complete();
     return {
       fleet: fleetName,
       action: expectedAction,
