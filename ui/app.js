@@ -510,6 +510,17 @@ function renderAutomationIssues(state) {
   for (const operation of state?.recoveryOperations ?? []) {
     const entry = document.createElement('p');
     entry.textContent = `Unresolved ${operation.scope}: ${operation.signature} — archived evidence: ${operation.evidence}. Still blocked; evidence alone does not authorize retry.`;
+    if (operation.evidence === 'finalized-success' || operation.evidence === 'finalized-failure') {
+      const button = document.createElement('button');
+      button.textContent = 'Check state and clear block';
+      button.onclick = async () => {
+        if (!window.confirm('Check this paused fleet against current chain state and clear its transaction block? Automation will stay disabled. Enable it separately after reviewing the result.')) return;
+        button.disabled = true;
+        try { await window.aepa.recoverOperation(operation.id); button.textContent = 'Reconciled — automation disabled'; }
+        catch (error) { window.alert(String(error.message ?? error)); button.disabled = false; }
+      };
+      entry.append(button);
+    }
     recovery.append(entry);
   }
   const activity = state?.activity ?? [];

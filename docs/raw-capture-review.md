@@ -154,3 +154,21 @@ durable action/expected-transition record. A safe next increment must persist th
 context before send and reconcile current fleet state plus the automation database
 before atomically acknowledging recovery. Existing signature evidence alone is
 insufficient for that decision. This inspection UI is not complete recovery.
+
+## MVP operator recovery (scope frozen)
+
+Instead of building automatic intent replay, Activity offers an explicit recovery
+button for matching finalized evidence. It requires a paused matching assignment,
+runs the existing live fleet planner, rejects blocked/changed state, durably
+disables automation, then clears that operation's barrier. The activity log records
+the signature, evidence and currently planned next step. Enabling remains a
+separate operator action; recovery never signs or resends anything. Missing
+metadata remains blocked. This reconciles the operator's next action against
+current state, not the historic intended transition; it does not claim automatic
+crash recovery. Concurrent recovery is rejected and enabling during recovery is
+blocked. Windows UI/RPC verification is still required.
+
+MVP boundary: no additional recovery framework, archive retention system or
+oversized-response spooling before the first Windows validation. The existing
+8 MiB cap leaves oversized evidence pending and visible. Those enhancements are
+follow-ups, not new blockers invented for this local implementation.

@@ -1,3 +1,4 @@
+import { recoverPausedOperation } from '../src/operator-recovery.js';
 import { RawStoreWorker } from '../src/raw-store-worker.js';
 import { RawCaptureRuntime, configureRawCapture } from '../src/raw-capture-runtime.js';
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
@@ -271,6 +272,7 @@ app.whenReady().then(() => {
       const signer = await getAuthorizedSignerStatus(signerPath);
       if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
       if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
+      if (recoveringFleets.has(assignment.fleetAddress)) throw new Error('Fleet recovery is in progress');
       database.setAutomationEnabled(true);
       database.recordAutomationActivity({ kind: 'enabled', detail: 'Live automatic execution explicitly enabled' });
       scheduleAutomationTick(0);
@@ -279,6 +281,42 @@ app.whenReady().then(() => {
       database.recordAutomationActivity({ kind: 'disabled', detail: 'Automatic execution disabled by the operator' });
     }
     return automationState();
+  });
+  const recoveringFleets = new Set<string>();
+  ipcMain.handle('automation:recover', async (_event, operationId: unknown) => {
+    if (typeof operationId !== 'string') throw new Error('Invalid recovery operation');
+    const settings = database.getSettings();
+    const operation = (await rawStore.inspectRecovery(settings.network, settings.playerProfile)).find(row => row.id === operationId);
+    if (!operation || !operation.scope.startsWith('fleet:')) throw new Error('Recovery operation not found');
+    const fleetAddress = operation.scope.slice(6);
+    const assignment = database.listAutomationAssignments().find(row => row.fleetAddress === fleetAddress);
+    if (!assignment || assignment.profile !== settings.playerProfile || assignment.status !== 'paused') throw new Error('Recovery requires a paused matching fleet');
+    if (recoveringFleets.has(fleetAddress)) throw new Error('Recovery already in progress');
+    recoveringFleets.add(fleetAddress);
+    try {
+      let nextStep = '';
+      await recoverPausedOperation(operation.evidence, {
+        inspect: async () => {
+          const observed = await inspectNextCopperStep(settings, assignment.targetStopAtUnixSeconds, assignment.fleetName, fleetAddress, {
+            homeSystemId:assignment.homeSystemId, homeSystemName:assignment.homeSystemName,
+            resourceId:assignment.resourceId, resourceIds:assignment.resourceIds, resourceName:assignment.resourceName,
+            destinationAddress:assignment.destinationAddress, destinationName:assignment.destinationName,
+          });
+          if (observed.decision.kind === 'blocked') throw new Error(observed.decision.reason);
+          nextStep = observed.decision.kind;
+          const current = database.getSettings();
+          const latest = database.listAutomationAssignments().find(row => row.fleetAddress === fleetAddress);
+          if (current.network !== settings.network || current.playerProfile !== settings.playerProfile ||
+              current.rpcUrl !== settings.rpcUrl || JSON.stringify(latest, (_key,value) => typeof value === 'bigint' ? value.toString() : value) !==
+              JSON.stringify(assignment, (_key,value) => typeof value === 'bigint' ? value.toString() : value)) throw new Error('Settings or assignment changed during recovery; try again');
+        },
+        disable: async () => { database.setAutomationEnabled(false, fleetAddress); },
+        resolve: async () => { await rawStore.resolveOperation(operation.id); },
+      });
+      database.recordAutomationActivity({fleetAddress, fleetName:assignment.fleetName, kind:'disabled',
+        detail:`Operator reconciled ${operation.signature} (${operation.evidence}); current next step: ${nextStep}. Automation remains disabled; enable separately.`});
+      return automationState();
+    } finally { recoveringFleets.delete(fleetAddress); }
   });
   ipcMain.handle('automation:clear-pause', () => {
     const assignment = database.getAutomationAssignment();
