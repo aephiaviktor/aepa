@@ -44,3 +44,31 @@ never blindly resubmitted. Simulations alone are not submitted transactions.
 The database API alone does not prove complete capture; submission integration,
 restart reconciliation, evidence collection and performance tests at that boundary
 remain required before claiming live coverage.
+
+## Raw-first increment
+
+`RawTransactionStore` separately retains signed wire bytes before send and original
+getTransaction response text. Unlike decoded JSON, original text preserves integers
+above JavaScript's safe range and unknown future fields. Network/reset/signature
+identify the raw submission; identical evidence bodies are deduplicated by hash.
+The archive uses WAL with synchronous=FULL for the durable pre-send write.
+
+`signAndSendTransactionOnce` accepts a recorder hook. It awaits the pre-send durable
+write and makes no network call if that write fails. Any exception after entering
+the send boundary is classified as ambiguous and includes a do-not-resubmit marker.
+A pending signed record remains available even if outcome recording fails.
+
+`collectRawTransactions` is a bounded collection primitive, not yet a running
+service. It requests base64 transaction data at finalized commitment and stores the
+original response body; a non-null transaction/meta response must match the saved
+wire bytes before collection is considered complete. Null responses remain pending.
+No business decoding or token/native balance arithmetic is done here.
+
+Remaining runtime work: instantiate and scope the archive, supply the recorder at
+both production send call sites, select a durable reset identifier, implement a
+single-flight collector with endpoint/network scoping, timeout/backoff and fair
+retry scheduling, and reconcile pending signatures without resending. The collector
+currently receives an injected reader; it does not select an RPC endpoint or start
+network requests by itself. Until that runtime wiring is complete, the application
+still does not capture live history. No deployment or signing was performed during
+these tests.

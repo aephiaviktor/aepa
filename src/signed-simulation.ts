@@ -49,6 +49,11 @@ export interface SignedSimulationResult {
   submitted: false;
 }
 
+export interface RawSendRecorder {
+  beforeSend(value: { wire: string; signature: string }): Promise<void>;
+  afterSend(outcome: 'submitted' | 'unknown'): Promise<void>;
+}
+
 export interface SingleSendResult {
   signature: string;
   submitted: true;
@@ -112,6 +117,7 @@ export async function signAndSendTransactionOnce(
   secretKey: Uint8Array,
   expectedAuthority: string,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  recorder?: RawSendRecorder,
 ): Promise<SingleSendResult> {
   const signer = await createKeyPairSignerFromBytes(secretKey);
   if (signer.address !== expectedAuthority) throw new Error('Stored signer does not match the active C4 Player Profile authority');
@@ -122,13 +128,20 @@ export async function signAndSendTransactionOnce(
   const signature = getSignatureFromTransaction(signedTransaction);
   onProgress?.('transaction-signed', { signature });
 
+  // A failed durable write must stop before the network boundary.
+  await recorder?.beforeSend({ wire, signature });
   onProgress?.('send-starting', { signature });
-  const returnedSignature = await rpc.sendTransaction(wire, {
-    encoding: 'base64',
-    skipPreflight: true,
-    maxRetries: 0n,
-  }).send();
-  onProgress?.('send-returned', { signature: returnedSignature });
-  if (returnedSignature !== signature) throw new Error('RPC returned a transaction signature different from the signed transaction');
+  try {
+    const returnedSignature = await rpc.sendTransaction(wire, {
+      encoding: 'base64', skipPreflight: true, maxRetries: 0n,
+    }).send();
+    onProgress?.('send-returned', { signature: returnedSignature });
+    if (returnedSignature !== signature) throw new Error('RPC signature mismatch');
+    await recorder?.afterSend('submitted');
+  } catch {
+    // The pre-send signature/wire remain durable even if outcome recording fails.
+    try { await recorder?.afterSend('unknown'); } catch { /* Reconcile the pending raw record. */ }
+    throw new Error(`Transaction ${signature} has an unknown submission outcome; it must not be resubmitted`);
+  }
   return Object.freeze({ signature, submitted: true } as const);
 }

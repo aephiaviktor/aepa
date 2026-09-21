@@ -98,3 +98,30 @@ test('send-only path rejects a signer-authority mismatch before any RPC call', a
   await assert.rejects(() => signAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, '11111111111111111111111111111111'), /does not match/);
   assert.equal(called, false);
 });
+test('raw recording completes before send and preserves ambiguous submission', async () => {
+  const secret = signerSecret();
+  const authority = encodeBase58(secret.subarray(32));
+  const order: string[] = [];
+  let savedWire = '';
+  const rpc = { sendTransaction(wire: Base64EncodedWireTransaction) {
+    assert.equal(wire, savedWire);
+    order.push('send');
+    return { send: async (): Promise<string> => { throw new Error('network unavailable'); } };
+  } };
+  await assert.rejects(() => signAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, authority, undefined, {
+    beforeSend: async ({ wire, signature }) => { assert.ok(signature); savedWire = wire; order.push('saved'); },
+    afterSend: async (outcome) => { assert.equal(outcome, 'unknown'); order.push('unknown'); },
+  }), /must not be resubmitted/);
+  assert.deepEqual(order, ['saved', 'send', 'unknown']);
+});
+
+test('a failed durable write prevents any send', async () => {
+  const secret = signerSecret();
+  const authority = encodeBase58(secret.subarray(32));
+  let sends = 0;
+  const rpc = { sendTransaction() { sends++; throw new Error('must not send'); } };
+  await assert.rejects(() => signAndSendTransactionOnce(rpc, unsignedTransaction(authority), secret, authority, undefined, {
+    beforeSend: async () => { throw new Error('disk full'); }, afterSend: async () => {},
+  }), /disk full/);
+  assert.equal(sends, 0);
+});
