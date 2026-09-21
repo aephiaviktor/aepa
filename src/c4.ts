@@ -1,3 +1,4 @@
+import { rawRecorderFor } from './raw-capture-runtime.js';
 import { createSageClient, resolveCargo, type FleetView } from '@aephia/atlas-kit';
 import { getStarbasePlayerForCharacterAtSystem } from '@aephia/atlas-kit/starbases';
 import { planFleetTransferCargoAtStarbase } from '@aephia/atlas-kit/cargo/actions';
@@ -574,7 +575,7 @@ export async function executeAuthorizedServiceBundleOnce(
     onProgress?.('fresh-service-verified', { fleet: prepared.fleet.name, authority: prepared.key.authority, ...stringifyServiceAmounts(prepared.amounts) });
     const transaction = await assemblePlan(sage.context, prepared.plan, { feePayer: prepared.key.authority, commitment: 'confirmed' });
     onProgress?.('transaction-assembled');
-    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, rawRecorderFor(settings));
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;
     while (Date.now() < confirmationDeadline) {
@@ -749,7 +750,7 @@ async function executeAuthorizedCopperStepOnce(
     // and the runner pauses with the real reason instead of a doomed broadcast.
     const simulation = await signAndSimulateTransaction(rpc, transaction, secretKey, prepared.key.authority);
     onProgress?.('simulation-verified', { slot: simulation.slot.toString() });
-    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress);
+    const submission = await signAndSendTransactionOnce(rpc, transaction, secretKey, prepared.key.authority, onProgress, rawRecorderFor(settings));
 
     const confirmationDeadline = Date.now() + 90_000;
     let confirmed: { confirmationStatus: 'confirmed' | 'finalized'; slot: bigint } | undefined;

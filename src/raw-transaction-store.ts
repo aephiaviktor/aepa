@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,7 +31,15 @@ export class RawTransactionStore {
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         submission_id TEXT NOT NULL REFERENCES raw_submissions(id),
         digest TEXT NOT NULL, received_at TEXT NOT NULL, response_text TEXT NOT NULL,
-        UNIQUE(submission_id, digest));`);
+        UNIQUE(submission_id, digest));
+      CREATE TABLE IF NOT EXISTS raw_generations(network TEXT PRIMARY KEY, generation TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS raw_retry(
+        submission_id TEXT PRIMARY KEY REFERENCES raw_submissions(id),
+        attempts INTEGER NOT NULL, next_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS raw_send_outcomes(
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        submission_id TEXT NOT NULL REFERENCES raw_submissions(id),
+        outcome TEXT NOT NULL, observed_at TEXT NOT NULL);`);
   }
 
   beforeSend(input: RawSubmission): string {
@@ -81,6 +89,42 @@ export class RawTransactionStore {
   responses(id: string): string[] {
     return this.db.prepare('SELECT response_text FROM raw_responses WHERE submission_id=? ORDER BY sequence').all(id)
       .map(row => String(row.response_text));
+  }
+  generation(network: string): string {
+    this.db.prepare('INSERT OR IGNORE INTO raw_generations VALUES(?,?)')
+      .run(network, `local-generation:${randomUUID()}`);
+    return String(this.db.prepare('SELECT generation FROM raw_generations WHERE network=?').get(network)!.generation);
+  }
+  rotateGeneration(network: string): string {
+    const generation = `local-generation:${randomUUID()}`;
+    this.db.prepare('INSERT INTO raw_generations VALUES(?,?) ON CONFLICT(network) DO UPDATE SET generation=excluded.generation')
+      .run(network, generation);
+    return generation;
+  }
+  recordOutcome(id: string, outcome: 'submitted' | 'unknown'): void {
+    this.db.prepare('INSERT INTO raw_send_outcomes(submission_id,outcome,observed_at) VALUES(?,?,?)')
+      .run(id, outcome, new Date().toISOString());
+  }
+
+  /** Persist backoff before I/O, so a crashed collector cannot monopolize the queue. */
+  claimDue(network: string, now = Date.now()): PendingRawSubmission | undefined {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare(`SELECT s.id,s.network,s.reset_epoch AS resetEpoch,s.profile,s.signature,s.wire,
+          COALESCE(r.attempts,0) AS attempts
+        FROM raw_submissions s LEFT JOIN raw_retry r ON r.submission_id=s.id
+        WHERE s.collected=0 AND s.network=? AND COALESCE(r.next_at,0)<=?
+        ORDER BY COALESCE(r.next_at,0),s.created_at,s.id LIMIT 1`).get(network, now) as unknown as (PendingRawSubmission & { attempts: number }) | undefined;
+      if (row) {
+        const delay = Math.min(3_600_000, 30_000 * 2 ** Math.min(row.attempts, 7));
+        this.db.prepare(`INSERT INTO raw_retry VALUES(?,?,?) ON CONFLICT(submission_id)
+          DO UPDATE SET attempts=excluded.attempts,next_at=excluded.next_at`).run(row.id, row.attempts + 1, now + delay);
+      }
+      this.db.exec('COMMIT');
+      if (!row) return undefined;
+      const { attempts, ...submission } = row;
+      return submission;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
   close(): void { this.db.close(); }
 }

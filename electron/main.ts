@@ -1,3 +1,5 @@
+import { RawTransactionStore } from '../src/raw-transaction-store.js';
+import { RawCaptureRuntime, configureRawCapture } from '../src/raw-capture-runtime.js';
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +28,8 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let database: AepaDatabase;
+let rawStore: RawTransactionStore;
+let rawCapture: RawCaptureRuntime;
 let automationRunner: AutomaticCopperRunner;
 let automationTimer: NodeJS.Timeout | undefined;
 let fleetSync: FleetSyncCoordinator<Awaited<ReturnType<typeof loadC4Fleets>>>;
@@ -110,6 +114,9 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   database = new AepaDatabase(path.join(app.getPath('userData'), 'aepa.sqlite'));
+  rawStore = new RawTransactionStore(path.join(app.getPath('userData'), 'aepa-raw-transactions.sqlite'));
+  rawCapture = new RawCaptureRuntime(rawStore, () => database.getSettings(), fetch, message => console.error(message));
+  configureRawCapture(rawCapture);
   signerPath = path.join(app.getPath('userData'), 'wallet-secret-key.enc');
   fleetSync = new FleetSyncCoordinator({
     database,
@@ -284,12 +291,14 @@ app.whenReady().then(() => {
     async (secretKey) => simulateNextCopperStepSigned(database.getSettings(), secretKey),
   ));
   ipcMain.handle('game:clear-cache', () => {
+    rawStore.rotateGeneration(database.getSettings().network);
     database.clearGameCache();
     database.recordAutomationActivity({ kind: 'disabled', detail: 'Cached game data cleared after a C4 reset (fresh start); settings and encrypted signer kept' });
     scheduleAutomationTick(0);
     return automationState();
   });
   createWindow();
+  rawCapture.start();
   fleetSync.start();
   catalogSync.start();
   scheduleAutomationTick(3_000);
@@ -303,6 +312,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  void rawCapture?.stop();
   if (automationTimer) clearTimeout(automationTimer);
   fleetSync?.stop();
   catalogSync?.stop();

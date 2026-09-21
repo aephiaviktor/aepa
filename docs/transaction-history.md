@@ -5,7 +5,7 @@ of automation category. Not a profile-wide chain scanner: manual actions and oth
 software are outside this initial source. Mining is the first MSA C4 projection,
 not a capture filter.
 
-## Storage foundation (implemented, not yet wired to submission)
+## Structured event foundation (independent of raw runtime capture)
 
 - One event ID represents one transaction attempt, not a fleet action or instruction.
 - Network/reset epoch/signature is unique across the store, regardless of profile,
@@ -33,7 +33,7 @@ uniqueness. Existing envelope version 1 remains additive-compatible. Migration
 fails rather than discarding colliding legacy transaction rows. Historical cursors
 and facts are preserved. The existing local-only foundation has not been deployed.
 
-## Integration boundary (not implemented in this patch)
+## Submission integration requirements
 
 All AEPA sends must pass a shared recorder, with durable intent and a known signed
 signature recorded before network submission. No mining/cargo allowlist. Confirmed
@@ -41,9 +41,8 @@ execution evidence is collected asynchronously; synchronization, decoding and MS
 projections never run on the send path. Unknown outcomes are reconciled by signature,
 never blindly resubmitted. Simulations alone are not submitted transactions.
 
-The database API alone does not prove complete capture; submission integration,
-restart reconciliation, evidence collection and performance tests at that boundary
-remain required before claiming live coverage.
+The database API alone does not prove complete capture. The raw runtime integration
+is described below; live coverage still requires production validation.
 
 ## Raw-first increment
 
@@ -64,11 +63,44 @@ original response body; a non-null transaction/meta response must match the save
 wire bytes before collection is considered complete. Null responses remain pending.
 No business decoding or token/native balance arithmetic is done here.
 
-Remaining runtime work: instantiate and scope the archive, supply the recorder at
-both production send call sites, select a durable reset identifier, implement a
-single-flight collector with endpoint/network scoping, timeout/backoff and fair
-retry scheduling, and reconcile pending signatures without resending. The collector
-currently receives an injected reader; it does not select an RPC endpoint or start
-network requests by itself. Until that runtime wiring is complete, the application
-still does not capture live history. No deployment or signing was performed during
-these tests.
+## Runtime integration (local branch, not deployed)
+
+Electron instantiates `aepa-raw-transactions.sqlite` beside its app database and
+configures the required recorder at both current C4 send sites. Direct callers of
+those C4 send functions must initialize capture too; they fail before sending if
+capture is unavailable. Simulation-only paths do not archive submissions.
+
+A single-flight background collector runs at startup and every five seconds, with
+at most twenty requests per batch and a ten-second request timeout. Durable retry
+claims back off from thirty seconds to one hour and put other due records first.
+HTTP 429/503 honors Retry-After (at least thirty seconds). Restart resumes pending
+records by fetching evidence, never by signing or resending. Null/missing results
+remain pending; finalized on-chain failures with matching bytes are retained as
+complete execution evidence, not mistaken for missing transactions.
+
+Endpoint URLs/credentials stay in memory. Transport failures and RPC error bodies
+are not archived, since providers may echo sensitive endpoint information. Public
+transaction result bodies are retained verbatim. Shutdown aborts the collector and
+prevents new recorded sends; the process closes the raw SQLite handle so an
+in-flight send can still append its outcome while unwinding.
+
+### Reset provenance limitation
+
+There is no verified authoritative chain-reset identifier available in the current
+app settings. `resetEpoch` therefore holds an explicitly labeled, durable
+`local-generation:<uuid>`, not a claimed chain epoch. The generation rotates on
+Clear Game Cache without deleting history. Imports must retain this provenance;
+they must not assume separate installations' local generations identify different
+chain resets. Collection can revisit old local generations on the same configured
+network, but only byte-identical transaction evidence completes a record. Automatic
+chain-reset detection and cross-source epoch mapping remain future work.
+
+### Validation boundary
+
+Unit/integration tests cover durable restart collection, exact response retention,
+pre-send persistence, ambiguous sends, network scoping, rate limits and single-flight
+shutdown. No live transaction was signed or submitted for these tests. Windows
+Electron smoke testing and production capture validation still require a separately
+authorized deployment. The original event store remains an independent structured
+foundation; raw runtime capture does not yet populate decoded business projections
+or supply the MSA synchronization interface.

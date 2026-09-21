@@ -47,3 +47,24 @@ test('an unrelated RPC transaction cannot complete the pending record', () => {
   assert.equal(store.pending().length, 1);
   store.close();
 });
+
+test('local capture generations are durable namespaces, not claimed chain reset identifiers', async () => {
+  const store = new RawTransactionStore(':memory:');
+  const first = store.generation('ptr');
+  assert.match(first, /^local-generation:/);
+  assert.equal(store.generation('ptr'), first);
+  assert.notEqual(store.rotateGeneration('ptr'), first);
+  store.close();
+});
+
+test('durable retry claims are fair and scoped by network', () => {
+  const store = new RawTransactionStore(':memory:');
+  for (const signature of ['a','b']) store.beforeSend({network:'ptr',resetEpoch:'one',profile:'p',signature,wire:'AQ=='});
+  store.beforeSend({network:'other',resetEpoch:'one',profile:'p',signature:'c',wire:'AQ=='});
+  const first = store.claimDue('ptr', 1000)!;
+  const second = store.claimDue('ptr', 1000)!;
+  assert.notEqual(first.id, second.id);
+  assert.equal(store.claimDue('ptr', 1000), undefined);
+  assert.ok(store.claimDue('ptr', 61000));
+  store.close();
+});
