@@ -1,3 +1,4 @@
+import { readRawResponse, RawResponseTooLarge } from './raw-response.js';
 import type { AppSettings } from './settings.js';
 import type { RawSendRecorder } from './signed-simulation.js';
 import type { CaptureStore } from './raw-store-worker.js';
@@ -15,6 +16,9 @@ export function rawRecorderFor(settings: AppSettings, scope: string): OperationR
 /** Endpoint credentials stay in memory. Only public transaction facts enter SQLite.
  * Local generations are provenance boundaries, NOT authoritative chain reset IDs. */
 export class RawCaptureRuntime {
+  private status = 'idle';
+  private lastResponseAt: string | null = null;
+  health() { return { status: this.status, lastResponseAt: this.lastResponseAt, responseLimitBytes: 8 * 1024 * 1024 }; }
   private stopped = false;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
@@ -58,6 +62,7 @@ export class RawCaptureRuntime {
     if (this.running) return this.running;
     this.running = this.collect().catch(() => {
       // Never leak a fetch/SQLite exception containing endpoints or response data.
+      this.status = 'storage-error';
       this.report('Raw transaction evidence collection failed; pending records retained');
     }).finally(() => { this.running = undefined; });
     return this.running;
@@ -81,18 +86,21 @@ export class RawCaptureRuntime {
           const retry = response.headers.get('retry-after');
           const seconds = retry === null ? NaN : Number(retry);
           const until = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : Date.parse(retry ?? '');
+          this.status = 'rate-limited';
           this.endpointNotBefore = Math.max(Date.now() + 30_000, Number.isFinite(until) ? until : 0);
           return;
         }
-        if (!response.ok) return;
-        text = await response.text();
+        if (!response.ok) { this.status = 'http-error'; return; }
+        text = await readRawResponse(response);
         // Do not archive arbitrary HTML/error pages that may echo endpoint credentials.
         const envelope = JSON.parse(text) as { result?: unknown; error?: unknown } | null;
-        if (!envelope || typeof envelope !== 'object' || envelope.error || !('result' in envelope)) continue;
-      } catch { return; }
+        if (!envelope || typeof envelope !== 'object' || envelope.error || !('result' in envelope)) { this.status = 'rpc-error'; continue; }
+        this.status = envelope.result === null ? 'awaiting-metadata' : 'response-received';
+      } catch (error) { this.status = error instanceof RawResponseTooLarge ? 'response-too-large' : 'transport-error'; return; }
       finally { clearTimeout(timeout); this.controller = undefined; }
       // A DB write failure reaches the supervisor; it is not an RPC miss.
       await this.store.recordResponse(row.id, text);
+      this.lastResponseAt = new Date().toISOString();
     }
   }
   async stop(): Promise<void> {

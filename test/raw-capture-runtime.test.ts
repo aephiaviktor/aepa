@@ -101,3 +101,14 @@ test('restarted runtime cannot send for an interrupted fleet even after metadata
   await restarted.recorder(settings,'fleet-b').beforeSend({signature:'next',wire:'AQ=='});
   await restarted.stop(); store.close();
 });
+
+test('collection health exposes safe error category without endpoint credentials', async () => {
+  const store = new RawTransactionStore(':memory:');
+  const runtime = new RawCaptureRuntime(store, () => settings, async () => { throw new Error('secret endpoint token'); });
+  await runtime.recorder(settings).beforeSend({signature:'sig',wire:'AQ=='});
+  await runtime.tick();
+  assert.equal(runtime.health().status,'transport-error');
+  assert.ok(!JSON.stringify(runtime.health()).includes('secret'));
+  assert.equal(store.pending().length,1);
+  await runtime.stop(); store.close();
+});

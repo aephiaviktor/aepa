@@ -111,3 +111,18 @@ Windows Electron worker packaging/runtime remains unverified. Fetch response
 buffering and the runtime's initial JSON validation still run on the main thread;
 response-size controls remain required. Worker isolation is not a claim that all
 main-thread processing has been eliminated.
+
+## Third correction: bounded responses and basic visible health
+
+The HTTP body reader now enforces an 8 MiB decoded-body byte cap while streaming
+(and checks Content-Length early). It rejects rather than archiving truncated
+bodies; oversized transactions remain pending. UTF-8 decoding is strict. This is
+a memory protection limit, not a claim that every possible response is captured:
+oversize evidence needs a future spool/export recovery path.
+
+Activity now displays a sanitized session-local collector status and last stored
+response time. HTTP/RPC/transport errors, rate limits and oversized responses are
+visible without echoing credentials. 'response-received' deliberately does not
+claim complete metadata or resolved automation. Pending counts/oldest age,
+persistent health history, disk-space warnings and safe reconciliation remain
+unfinished. The 8 MiB cap bounds but does not remove main-thread JSON parsing.

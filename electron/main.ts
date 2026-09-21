@@ -39,6 +39,7 @@ let signerPath: string;
 function automationState() {
   const assignments = database.listAutomationAssignments();
   return {
+    captureHealth: rawCapture?.health(),
     assignments: assignments.map((assignment) => ({
       ...assignment,
       targetStopAtUnixSeconds: assignment.targetStopAtUnixSeconds?.toString(),

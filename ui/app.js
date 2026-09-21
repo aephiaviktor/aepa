@@ -483,6 +483,16 @@ function renderActivityEntries(host, entries) {
 function renderAutomationIssues(state) {
   const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
   const errors = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
+  let capture = document.getElementById('raw-capture-health');
+  if (!capture) {
+    capture = document.createElement('p');
+    capture.id = 'raw-capture-health';
+    $('activity-page-list').before(capture);
+  }
+  const health = state?.captureHealth;
+  capture.textContent = health
+    ? `Raw transaction capture: ${health.status}. Last stored response: ${health.lastResponseAt ?? 'none this session'}.`
+    : 'Raw transaction capture: status unavailable.';
   const activity = state?.activity ?? [];
   $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
   const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
