@@ -94,3 +94,15 @@ test('archive health separates pending evidence from unresolved operations and s
   assert.ok(store.health('ptr','p').databaseBytes>0);
   store.close();
 });
+
+test('recovery inspection exposes only scoped unresolved operations with terminal evidence', () => {
+  const store = new RawTransactionStore(':memory:');
+  const input={network:'ptr',resetEpoch:'one',profile:'p',signature:'sig',wire:'AQ=='};
+  const id=store.beforeOperationSend(input,'fleet:a');
+  assert.equal(store.inspectRecovery('ptr','p')[0].evidence,'missing');
+  store.recordResponse(id,'{"result":{"transaction":["AQ==","base64"],"meta":{"err":null}}}');
+  assert.equal(store.inspectRecovery('ptr','p')[0].evidence,'finalized-success');
+  assert.equal(store.inspectRecovery('ptr','other').length,0);
+  assert.equal(store.health('ptr','p').unresolvedOperations,1);
+  store.close();
+});

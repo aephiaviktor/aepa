@@ -3,7 +3,7 @@ import type { RawTransactionStore, RawSubmission } from './raw-transaction-store
 
 export type RawStoreMethods = Pick<RawTransactionStore,
   'generation' | 'rotateGeneration' | 'beforeOperationSend' | 'resolveOperation' |
-  'recordOutcome' | 'claimDue' | 'recordResponse' | 'health'>;
+  'recordOutcome' | 'claimDue' | 'recordResponse' | 'health' | 'inspectRecovery'>;
 export type CaptureStore = { [K in keyof RawStoreMethods]:
   (...args: Parameters<RawStoreMethods[K]>) => ReturnType<RawStoreMethods[K]> | Promise<ReturnType<RawStoreMethods[K]>> };
 
@@ -45,6 +45,7 @@ export class RawStoreWorker implements CaptureStore {
     if (this.closing) return Promise.reject(new Error('Raw storage worker is closed'));
     return this.dispatch(method,args) as Promise<ReturnType<RawStoreMethods[K]>>;
   }
+  inspectRecovery(network:string,profile:string) { return this.call('inspectRecovery',network,profile); }
   health(network:string,profile:string) { return this.call('health',network,profile); }
   generation(network:string) { return this.call('generation',network); }
   rotateGeneration(network:string) { return this.call('rotateGeneration',network); }

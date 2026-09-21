@@ -5,7 +5,7 @@ const port = parentPort;
 if (!port) throw new Error('Raw store requires a worker');
 const store = new RawTransactionStore(workerData.file as string);
 // Explicit allowlist: this port is internal, never exposed over IPC to renderers.
-const methods = new Set(['generation','rotateGeneration','beforeOperationSend','resolveOperation','recordOutcome','claimDue','recordResponse','health','close']);
+const methods = new Set(['generation','rotateGeneration','beforeOperationSend','resolveOperation','recordOutcome','claimDue','recordResponse','health','inspectRecovery','close']);
 port.on('message', ({id,method,args}: {id:number;method:string;args:unknown[]}) => {
   try {
     if (!methods.has(method)) throw new Error('Unknown method');

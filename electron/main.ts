@@ -41,6 +41,7 @@ async function automationState() {
   const archiveHealth = await rawStore.health(settings.network, settings.playerProfile).catch(() => null);
   const assignments = database.listAutomationAssignments();
   return {
+    recoveryOperations: await rawStore.inspectRecovery(settings.network, settings.playerProfile).catch(() => null),
     archiveHealth,
     captureHealth: rawCapture?.health(),
     assignments: assignments.map((assignment) => ({

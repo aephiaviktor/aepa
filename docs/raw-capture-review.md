@@ -139,3 +139,18 @@ separate counts: fully collected metadata does not imply safe operation recovery
 This adds visibility, not retention or automatic reconciliation. Worker health
 queries currently aggregate pending rows on demand; large-backlog benchmarking
 and cached health snapshots remain performance follow-ups.
+
+## Recovery inspection foundation
+
+Activity now lists up to 100 unresolved operations for the configured profile and
+network, with fleet scope, signature and classification of the latest archived
+finalized-query response (missing, invalid, finalized-success/failure). This is
+read-only and runs in the archive worker. It does not clear any barrier, submit a
+transaction, or claim that current fleet state has been reconciled. As with raw
+collection, finality relies on the configured RPC honoring finalized commitment.
+
+Automatic unlocking remains deliberately absent: the archive currently lacks a
+durable action/expected-transition record. A safe next increment must persist that
+context before send and reconcile current fleet state plus the automation database
+before atomically acknowledging recovery. Existing signature evidence alone is
+insufficient for that decision. This inspection UI is not complete recovery.

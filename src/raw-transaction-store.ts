@@ -148,6 +148,30 @@ export class RawTransactionStore {
       return submission;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
+  /** Read-only recovery evidence. This never authorizes an unlock or a resend. */
+  inspectRecovery(network: string, profile: string) {
+    const rows = this.db.prepare(`SELECT b.scope,s.id,s.signature,s.wire,s.created_at
+      FROM raw_operation_barriers b JOIN raw_submissions s ON s.id=b.submission_id
+      WHERE b.network=? AND b.profile=? ORDER BY s.created_at,s.id LIMIT 100`).all(network,profile);
+    return rows.map(row => {
+      let evidence = 'missing';
+      // Inspect only the latest saved response; never expose raw bodies to UI.
+      const response = this.db.prepare('SELECT response_text FROM raw_responses WHERE submission_id=? ORDER BY sequence DESC LIMIT 1').get(row.id!);
+      if (response) {
+        try {
+          const result = JSON.parse(String(response.response_text))?.result;
+          if (Array.isArray(result?.transaction) && result.transaction[0] === row.wire &&
+              result.transaction[1] === 'base64' && result.meta &&
+              Object.prototype.hasOwnProperty.call(result.meta,'err')) {
+            evidence = result.meta.err === null ? 'finalized-success' : 'finalized-failure';
+          }
+        } catch { evidence = 'invalid'; }
+      }
+      return { id:String(row.id), scope:String(row.scope), signature:String(row.signature),
+        createdAt:String(row.created_at), evidence };
+    });
+  }
+
   health(network: string, profile: string) {
     const pending = this.db.prepare(`SELECT COUNT(*) AS count, MIN(created_at) AS oldest
       FROM raw_submissions WHERE network=? AND profile=? AND collected=0`).get(network,profile)!;

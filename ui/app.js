@@ -500,6 +500,18 @@ function renderAutomationIssues(state) {
   if (archive?.freeDiskBytes !== null && archive?.freeDiskBytes < 1073741824) {
     capture.textContent += ' WARNING: less than 1 GiB disk space remains; capture may fail. No history is automatically deleted.';
   }
+  let recovery = document.getElementById('raw-recovery-operations');
+  if (!recovery) {
+    recovery = document.createElement('div');
+    recovery.id = 'raw-recovery-operations';
+    capture.after(recovery);
+  }
+  recovery.replaceChildren();
+  for (const operation of state?.recoveryOperations ?? []) {
+    const entry = document.createElement('p');
+    entry.textContent = `Unresolved ${operation.scope}: ${operation.signature} — archived evidence: ${operation.evidence}. Still blocked; evidence alone does not authorize retry.`;
+    recovery.append(entry);
+  }
   const activity = state?.activity ?? [];
   $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
   const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
