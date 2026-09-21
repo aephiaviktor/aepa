@@ -1,4 +1,4 @@
-import { RawTransactionStore } from '../src/raw-transaction-store.js';
+import { RawStoreWorker } from '../src/raw-store-worker.js';
 import { RawCaptureRuntime, configureRawCapture } from '../src/raw-capture-runtime.js';
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
@@ -28,7 +28,7 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let database: AepaDatabase;
-let rawStore: RawTransactionStore;
+let rawStore: RawStoreWorker;
 let rawCapture: RawCaptureRuntime;
 let automationRunner: AutomaticCopperRunner;
 let automationTimer: NodeJS.Timeout | undefined;
@@ -114,7 +114,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   database = new AepaDatabase(path.join(app.getPath('userData'), 'aepa.sqlite'));
-  rawStore = new RawTransactionStore(path.join(app.getPath('userData'), 'aepa-raw-transactions.sqlite'));
+  rawStore = new RawStoreWorker(path.join(app.getPath('userData'), 'aepa-raw-transactions.sqlite'));
   rawCapture = new RawCaptureRuntime(rawStore, () => database.getSettings(), fetch, message => console.error(message));
   configureRawCapture(rawCapture);
   signerPath = path.join(app.getPath('userData'), 'wallet-secret-key.enc');
@@ -290,8 +290,8 @@ app.whenReady().then(() => {
     safeStorage,
     async (secretKey) => simulateNextCopperStepSigned(database.getSettings(), secretKey),
   ));
-  ipcMain.handle('game:clear-cache', () => {
-    rawStore.rotateGeneration(database.getSettings().network);
+  ipcMain.handle('game:clear-cache', async () => {
+    await rawStore.rotateGeneration(database.getSettings().network);
     database.clearGameCache();
     database.recordAutomationActivity({ kind: 'disabled', detail: 'Cached game data cleared after a C4 reset (fresh start); settings and encrypted signer kept' });
     scheduleAutomationTick(0);

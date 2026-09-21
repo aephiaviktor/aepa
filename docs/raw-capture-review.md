@@ -89,3 +89,25 @@ archive is being migrated, because this feature branch has not been deployed.
 Remaining before release: a safe reconciliation workflow, worker-based storage,
 health/capacity reporting, response-size controls and Windows validation. Do not
 represent this correction as completing all review findings.
+
+## Second correction: worker-owned raw SQLite
+
+Electron now uses RawStoreWorker. A dedicated Node worker exclusively constructs
+and owns RawTransactionStore; SQLite FULL writes, lock waits and checkpoints no
+longer execute on Electron's main thread. The runtime awaits acknowledgements of
+committed writes before sending and awaits outcome/barrier changes as well.
+
+The worker protocol is internal and allowlisted. Errors reject waiting callers;
+worker startup/death cannot silently leave a send waiting indefinitely. Explicit
+close drains already accepted messages, rejects new calls and terminates the
+worker. Electron shutdown intentionally stops capture without prematurely closing
+storage while an existing send may still unwind; process exit ends the worker.
+A stop race after durable pre-send recording leaves a conservative barrier and
+prevents the network send.
+
+Tests include an actual SQLite write lock released by a main-thread timer while
+the worker waits, plus startup failure, FIFO drain and raw barrier behavior.
+Windows Electron worker packaging/runtime remains unverified. Fetch response
+buffering and the runtime's initial JSON validation still run on the main thread;
+response-size controls remain required. Worker isolation is not a claim that all
+main-thread processing has been eliminated.

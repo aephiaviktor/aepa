@@ -31,6 +31,7 @@ test('collector is single-flight, network scoped and stop aborts its request', a
   });
   await runtime.recorder(settings).beforeSend({signature:'sig',wire:'AQ=='});
   const first=runtime.tick(); const second=runtime.tick();
+  await new Promise(resolve => setImmediate(resolve));
   await runtime.stop(); await Promise.all([first,second]);
   assert.equal(requests,1);
   assert.equal(store.pending().length,2);

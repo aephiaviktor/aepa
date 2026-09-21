@@ -1,6 +1,6 @@
 import type { AppSettings } from './settings.js';
 import type { RawSendRecorder } from './signed-simulation.js';
-import type { RawTransactionStore } from './raw-transaction-store.js';
+import type { CaptureStore } from './raw-store-worker.js';
 
 export interface OperationRecorder extends RawSendRecorder { complete(): Promise<void> }
 
@@ -21,28 +21,30 @@ export class RawCaptureRuntime {
   private controller?: AbortController;
   private endpointNotBefore = 0;
   constructor(
-    private readonly store: RawTransactionStore,
+    private readonly store: CaptureStore,
     private readonly settings: () => AppSettings,
     private readonly request: FetchRaw = fetch,
     private readonly report: (message: string) => void = () => {},
   ) {}
 
   recorder(settings: AppSettings, scope = 'profile'): OperationRecorder {
-    const context = { network: settings.network, profile: settings.playerProfile,
-      resetEpoch: this.store.generation(settings.network) };
+    const context = { network: settings.network, profile: settings.playerProfile };
     let id: string | undefined;
     return {
       beforeSend: async ({ wire, signature }) => {
         if (this.stopped) throw new Error('Raw capture is stopped; nothing submitted');
-        id = this.store.beforeOperationSend({ ...context, wire, signature }, scope);
+        const resetEpoch = await this.store.generation(context.network);
+        if (this.stopped) throw new Error('Raw capture is stopped; nothing submitted');
+        id = await this.store.beforeOperationSend({ ...context, resetEpoch, wire, signature }, scope);
+        if (this.stopped) throw new Error('Raw capture is stopped; nothing submitted');
       },
       complete: async () => {
         if (!id) throw new Error('Missing operation record');
-        this.store.resolveOperation(id);
+        await this.store.resolveOperation(id);
       },
       afterSend: async outcome => {
         if (!id) throw new Error('Missing pre-send raw record');
-        this.store.recordOutcome(id, outcome);
+        await this.store.recordOutcome(id, outcome);
       },
     };
   }
@@ -63,8 +65,8 @@ export class RawCaptureRuntime {
   private async collect(): Promise<void> {
     for (let i = 0; i < 20 && !this.stopped && Date.now() >= this.endpointNotBefore; i++) {
       const settings = this.settings();
-      const row = this.store.claimDue(settings.network);
-      if (!row) return;
+      const row = await this.store.claimDue(settings.network);
+      if (!row || this.stopped) return;
       this.controller = new AbortController();
       const timeout = setTimeout(() => this.controller?.abort(), 10_000);
       let text: string;
@@ -90,7 +92,7 @@ export class RawCaptureRuntime {
       } catch { return; }
       finally { clearTimeout(timeout); this.controller = undefined; }
       // A DB write failure reaches the supervisor; it is not an RPC miss.
-      this.store.recordResponse(row.id, text);
+      await this.store.recordResponse(row.id, text);
     }
   }
   async stop(): Promise<void> {
