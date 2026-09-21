@@ -414,7 +414,9 @@ async function prepareNextCopperStep(
   const observed = await observeMiningLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
   const decision = forcedAction === 'stop-mining' && observed.fleet.state.kind === 'mining'
     ? { kind: 'stop-mining' as const }
-    : observed.decision;
+    : forcedAction === 'dock' && observed.fleet.state.kind === 'idle' && observed.decision.kind === 'start-mining'
+      ? { kind: 'dock' as const }
+      : observed.decision;
   const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl, scope);
   return { ...observed, decision, plan };
 }
@@ -707,13 +709,14 @@ export async function simulateNextCopperStepSigned(settings: AppSettings, secret
 export async function inspectNextCopperStep(settings: AppSettings, targetStopAtUnixSeconds?: bigint, fleetName = 'MF-01', fleetAddress?: string, scope: MiningLoopScope = DEFAULT_MINING_SCOPE): Promise<{
   decision: AutomaticMiningDecision;
   targetMiningSeconds: bigint;
+  fleetState: string;
 }> {
   if (!settings.playerProfile) throw new Error('Configure a Player Profile before inspecting automation');
   const rpc = createSolanaRpc(settings.rpcUrl);
   const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
   try {
     const observed = await observeMiningLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
-    return { decision: observed.decision, targetMiningSeconds: BigInt(observed.preview.targetMiningSeconds) };
+    return { decision: observed.decision, targetMiningSeconds: BigInt(observed.preview.targetMiningSeconds), fleetState: observed.fleet.state.kind };
   } finally {
     await sage.dispose();
   }

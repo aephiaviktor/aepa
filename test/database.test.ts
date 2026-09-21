@@ -146,6 +146,49 @@ test('SQLite queues edits to a running assignment and applies them without losin
   database.close();
 });
 
+test('SQLite persists a per-fleet stop request and disables only at the serviced boundary', () => {
+  const database = new AepaDatabase(':memory:');
+  const value = {
+    profile: 'profile-1', fleetAddress: 'fleet-mf03', fleetName: 'MF-03', assignment: 'mining' as const,
+    homeSystemAddress: 'eternity', homeSystemId: 10, homeSystemName: 'Eternity', resourceId: 329,
+    resourceName: 'Carbon', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto' as const,
+  };
+  database.saveAutomationAssignment(value);
+  database.setAutomationEnabled(true, value.fleetAddress);
+  database.setAutomationTargetStop(2_000n, value.fleetAddress);
+  database.saveAutomationAssignment({ ...value, resourceId: 311, resourceName: 'Copper Ore' });
+  assert.equal(database.getAutomationAssignment(value.fleetAddress)?.pendingAssignment?.resourceName, 'Copper Ore');
+
+  const requested = database.requestAutomationStop('end-of-cycle', value.fleetAddress);
+  assert.equal(requested.stopMode, 'end-of-cycle');
+  assert.equal(requested.enabled, true);
+  assert.equal(requested.status, 'running');
+  assert.ok(requested.stopRequestedAt);
+  assert.equal(requested.pendingAssignment, undefined);
+
+  const completed = database.completeAutomationStop(value.fleetAddress);
+  assert.equal(completed.stopMode, undefined);
+  assert.equal(completed.stopRequestedAt, undefined);
+  assert.equal(completed.targetStopAtUnixSeconds, undefined);
+  assert.equal(completed.enabled, false);
+  assert.equal(completed.status, 'disabled');
+  database.close();
+});
+
+test('stop requests reject disabled and paused fleets', () => {
+  const database = new AepaDatabase(':memory:');
+  database.saveAutomationAssignment({
+    profile: 'profile-1', fleetAddress: 'fleet-mf03', fleetName: 'MF-03', assignment: 'mining',
+    homeSystemAddress: 'eternity', homeSystemId: 10, homeSystemName: 'Eternity', resourceId: 329,
+    resourceName: 'Carbon', destinationAddress: 'ioki', destinationName: 'Ioki', travelMode: 'auto',
+  });
+  assert.throws(() => database.requestAutomationStop('now', 'fleet-mf03'), /running/i);
+  database.setAutomationEnabled(true, 'fleet-mf03');
+  database.pauseAutomation('ambiguous submission outcome', 'fleet-mf03');
+  assert.throws(() => database.requestAutomationStop('now', 'fleet-mf03'), /reconcil/i);
+  database.close();
+});
+
 test('SQLite persists catalog sync metadata and keeps the last-good catalog across failures', () => {
   const database = new AepaDatabase(':memory:');
   const scope = 'profile-1';

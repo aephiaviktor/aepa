@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('aepa', Object.freeze({
   loadAutomationCatalog: () => ipcRenderer.invoke('automation:catalog'),
   getAutomationState: () => ipcRenderer.invoke('automation:state'),
   saveAutomationAssignment: (value) => ipcRenderer.invoke('automation:save', value),
+  requestAutomationStop: (fleetAddress, mode) => ipcRenderer.invoke('automation:request-stop', fleetAddress, mode),
   setAutomationEnabled: (enabled) => ipcRenderer.invoke('automation:set-enabled', enabled),
   recoverOperation: (id) => ipcRenderer.invoke('automation:recover', id),
   clearAutomationPause: () => ipcRenderer.invoke('automation:clear-pause'),

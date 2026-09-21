@@ -13,6 +13,7 @@ import {
   type MiningLoopScope,
 } from './c4.js';
 import type { AppSettings } from './settings.js';
+import { stoppingDirective, type AutomationStopMode } from './automation-stop.js';
 
 export { PLAN_STAGE_MARKER };
 
@@ -39,6 +40,9 @@ export function planStageReason(message: string): string {
 export type AutomaticCopperStepResult = {
   kind: 'waiting';
   untilUnixSeconds: bigint;
+  detail: string;
+} | {
+  kind: 'stopped';
   detail: string;
 } | {
   kind: 'confirmed';
@@ -73,17 +77,26 @@ export async function executeNextCopperStepOnce(
   fleetName = 'MF-01',
   fleetAddress?: string,
   scope?: MiningLoopScope,
+  stopMode?: AutomationStopMode,
 ): Promise<AutomaticCopperStepResult> {
   const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
-  if (inspection.decision.kind === 'wait') {
+  const directive = stopMode
+    ? stoppingDirective(stopMode, inspection.fleetState, inspection.decision.kind)
+    : 'continue';
+  if (directive === 'complete') {
+    return { kind: 'stopped', detail: `Fleet ${fleetName} is docked at ${scope?.homeSystemName ?? 'Home Starbase'}, unloaded, refilled, and Automation is disabled` };
+  }
+  if (directive === 'continue' && inspection.decision.kind === 'wait') {
     return {
       kind: 'waiting',
       untilUnixSeconds: inspection.decision.untilUnixSeconds,
       detail: `Mining remains active until ${inspection.decision.untilUnixSeconds.toString()}`,
     };
   }
-  if (inspection.decision.kind === 'blocked') throw new Error(inspection.decision.reason);
-  const action = inspection.decision.kind;
+  if (directive === 'continue' && inspection.decision.kind === 'blocked') throw new Error(inspection.decision.reason);
+  const action = directive === 'stop-mining' || directive === 'dock'
+    ? directive
+    : inspection.decision.kind as AuthorizedLiveAction;
   const targetStop = action === 'start-mining'
     ? BigInt(Math.floor(Date.now() / 1_000)) + inspection.targetMiningSeconds
     : undefined;

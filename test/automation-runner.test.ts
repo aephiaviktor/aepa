@@ -58,6 +58,19 @@ test('clears the durable mining deadline only after stop-mining is confirmed', a
   database.close();
 });
 
+test('completes a durable stop request only after the fleet is serviced and docked', async () => {
+  const database = enabledDatabase();
+  database.requestAutomationStop('now', 'fleet-mf01');
+  const runner = new AutomaticCopperRunner(database, async () => ({ kind: 'stopped', detail: 'Fleet is docked, unloaded, and refilled' }));
+  assert.deepEqual(await runner.tick(), { kind: 'disabled' });
+  const assignment = database.getAutomationAssignment('fleet-mf01')!;
+  assert.equal(assignment.enabled, false);
+  assert.equal(assignment.status, 'disabled');
+  assert.equal(assignment.stopMode, undefined);
+  assert.match(database.listAutomationActivity()[0].detail, /docked, unloaded, and refilled/i);
+  database.close();
+});
+
 test('exposes a fast-follow delay after a confirmed action instead of the full refresh interval', () => {
   // SLYA-style snappiness: as soon as one action confirms, the next runner tick
   // should follow within a couple of seconds, not after the 60s (or 15s floor)
@@ -99,6 +112,33 @@ test('round-robins every enabled fleet assignment instead of starving later flee
   });
   await runner.tick(); await runner.tick(); await runner.tick();
   assert.deepEqual(visited, ['MF-02:Carbon', 'MF-03:Biomass', 'MF-04:Hydrogen']);
+  database.close();
+});
+
+test('prioritizes a requested fleet stop over normal mining work', async () => {
+  const database = new AepaDatabase(':memory:');
+  const base = {
+    profile: 'profile-1', assignment: 'mining' as const, homeSystemAddress: 'eternity', homeSystemId: 10,
+    homeSystemName: 'Eternity', resourceId: 311, resourceName: 'Copper Ore', destinationAddress: 'ioki',
+    destinationName: 'Ioki', travelMode: 'auto' as const,
+  };
+  database.saveAutomationAssignments([
+    { ...base, fleetAddress: 'fleet-1', fleetName: 'MF-01' },
+    { ...base, fleetAddress: 'fleet-3', fleetName: 'MF-03' },
+  ]);
+  database.setAutomationEnabled(true, 'fleet-1');
+  database.setAutomationEnabled(true, 'fleet-3');
+  database.requestAutomationStop('now', 'fleet-3');
+  const visited: string[] = [];
+  const runner = new AutomaticCopperRunner(database, async (assignment) => {
+    visited.push(assignment.fleetName);
+    return { kind: 'waiting', untilUnixSeconds: 2_000n, detail: 'Waiting' };
+  });
+  await runner.tick();
+  assert.deepEqual(visited, ['MF-03']);
+  await runner.tick();
+  await runner.tick();
+  assert.deepEqual(visited, ['MF-03', 'MF-01', 'MF-03'], 'a waiting stop must not starve other fleets');
   database.close();
 });
 

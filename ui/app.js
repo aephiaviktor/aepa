@@ -14,6 +14,7 @@ let automationCatalogLoad;
 let automationRuntime;
 let lastFleetSnapshotKey;
 let miningLoopPlans = new Map();
+let pendingStopFleet;
 
 function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
@@ -429,7 +430,7 @@ function createAutomationRow(draft = {}) {
     <select data-field="travel" aria-label="Travel"><option value="auto">Same system</option><option value="subwarp">Subwarp</option><option value="warp">Warp</option><option value="warp-lane">Warp lane</option></select>
     <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
     <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources · 0/8</summary><div class="resource-options"></div></details>
-    <button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button>
+    <div class="row-actions"><button class="stop-fleet secondary" type="button">Stop</button><button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button></div>
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
   replaceSelectOptions(fleet, availableFleetOptions(row, draft.fleetAddress), draft.fleetAddress);
@@ -447,6 +448,15 @@ function createAutomationRow(draft = {}) {
     row.remove();
     renderAutomationRows(writeAutomationDrafts());
   };
+  row.querySelector('.stop-fleet').onclick = () => {
+    const persisted = (automationRuntime?.assignments ?? []).find((assignment) => assignment.fleetAddress === fleet.value);
+    if (!persisted?.enabled || persisted.status !== 'running' || persisted.stopMode) return;
+    pendingStopFleet = { address: persisted.fleetAddress, name: persisted.fleetName };
+    $('stop-title').textContent = `Stop ${persisted.fleetName} Automation?`;
+    $('stop-message').textContent = 'Choose when mining should stop. AEPA will then return the fleet home, unload, refill, and disable its assignment.';
+    $('stop-unsaved-warning').hidden = !hasUnsavedAutomationChanges();
+    $('stop-dialog').showModal();
+  };
   refreshAutomationRow(row, draft.destinationAddress, draft.travelMode);
   const persisted = (automationRuntime?.assignments ?? []).find((assignment) => assignment.fleetAddress === fleet.value);
   if (persisted?.pendingAssignment) row.classList.add('pending');
@@ -462,6 +472,7 @@ function renderAutomationRows(drafts) {
   for (const row of rows) row.querySelector('.remove-fleet').hidden = rows.length === 1;
   $('add-fleet').disabled = rows.length >= automationCatalog.fleets.length;
   writeAutomationDrafts();
+  syncPendingRowIndicators();
   updateAssignmentControls();
 }
 
@@ -511,12 +522,17 @@ function renderAutomationIssues(state) {
     const entry = document.createElement('p');
     entry.textContent = `Unresolved ${operation.scope}: ${operation.signature} — archived evidence: ${operation.evidence}. Still blocked; evidence alone does not authorize retry.`;
     if (operation.evidence === 'finalized-success' || operation.evidence === 'finalized-failure') {
+      const recoveryFleet = assignments.find((assignment) => operation.scope === `fleet:${assignment.fleetAddress}`);
+      const resumesStop = !!recoveryFleet?.stopMode;
       const button = document.createElement('button');
       button.textContent = 'Check state and clear block';
       button.onclick = async () => {
-        if (!window.confirm('Check this paused fleet against current chain state and clear its transaction block? Automation will stay disabled. Enable it separately after reviewing the result.')) return;
+        const consequence = resumesStop
+          ? 'The already-requested safe shutdown will resume after reconciliation.'
+          : 'Automation will stay disabled. Enable it separately after reviewing the result.';
+        if (!window.confirm(`Check this paused fleet against current chain state and clear its transaction block? ${consequence}`)) return;
         button.disabled = true;
-        try { await window.aepa.recoverOperation(operation.id); button.textContent = 'Reconciled — automation disabled'; }
+        try { await window.aepa.recoverOperation(operation.id); button.textContent = resumesStop ? 'Reconciled — safe stop resumed' : 'Reconciled — automation disabled'; }
         catch (error) { window.alert(String(error.message ?? error)); button.disabled = false; }
       };
       entry.append(button);
@@ -536,6 +552,23 @@ function syncPendingRowIndicators() {
     const fleetAddress = row.querySelector('[data-field="fleet"]').value;
     const persisted = assignments.find((assignment) => assignment.fleetAddress === fleetAddress);
     row.classList.toggle('pending', !!persisted?.pendingAssignment);
+    row.classList.toggle('stopping', !!persisted?.stopMode);
+    const stopping = !!persisted?.stopMode;
+    for (const select of row.querySelectorAll('select')) select.disabled = stopping;
+    updateResourceCounter(row);
+    if (stopping) for (const input of row.querySelectorAll('input')) input.disabled = true;
+    const stop = row.querySelector('.stop-fleet');
+    stop.hidden = !persisted?.enabled && !stopping;
+    stop.disabled = stopping || persisted?.status === 'paused';
+    stop.textContent = persisted?.stopMode === 'now'
+      ? 'Stopping…'
+      : persisted?.stopMode === 'end-of-cycle'
+        ? 'Stopping after cycle'
+        : 'Stop';
+    stop.title = persisted?.stopMode === 'end-of-cycle' ? 'Stopping after current cycle' : persisted?.stopMode === 'now' ? 'Stopping now' : '';
+    const remove = row.querySelector('.remove-fleet');
+    remove.disabled = !!persisted && (persisted.enabled || persisted.status === 'paused' || stopping);
+    remove.title = remove.disabled ? 'Stop this fleet safely before removing its assignment.' : '';
   }
 }
 
@@ -708,8 +741,28 @@ async function saveAutomationChanges() {
   }
 }
 
+async function requestFleetStop(mode) {
+  if (!pendingStopFleet) return;
+  const buttons = [$('stop-now'), $('stop-end-cycle'), $('cancel-stop')];
+  for (const button of buttons) button.disabled = true;
+  try {
+    const state = await window.aepa.requestAutomationStop(pendingStopFleet.address, mode);
+    pendingStopFleet = undefined;
+    $('stop-dialog').close();
+    renderAutomationState(state);
+    renderAutomationRows(savedDrafts());
+  } catch (error) {
+    $('stop-message').textContent = `Stop blocked — ${error.message || String(error)}`;
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
+}
+
 $('save-assignment').onclick = () => void saveAutomationChanges();
 $('cancel-assignment').onclick = restoreSavedAssignment;
+$('cancel-stop').onclick = () => { pendingStopFleet = undefined; $('stop-dialog').close(); };
+$('stop-now').onclick = () => void requestFleetStop('now');
+$('stop-end-cycle').onclick = () => void requestFleetStop('end-of-cycle');
 $('keep-editing').onclick = () => { pendingNavigation = undefined; $('unsaved-dialog').close(); };
 $('discard-and-leave').onclick = () => {
   const navigate = pendingNavigation;

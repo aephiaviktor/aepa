@@ -1,3 +1,4 @@
+import { shouldEnableSavedAssignment } from '../src/automation-stop.js';
 import { recoverPausedOperation } from '../src/operator-recovery.js';
 import { RawStoreWorker } from '../src/raw-store-worker.js';
 import { RawCaptureRuntime, configureRawCapture } from '../src/raw-capture-runtime.js';
@@ -175,7 +176,7 @@ app.whenReady().then(() => {
         if (stage === 'automatic-action-selected' && details?.action === 'start-mining' && details.targetStopAtUnixSeconds) {
           database.setAutomationTargetStop(BigInt(details.targetStopAtUnixSeconds), effective.fleetAddress);
         }
-      }, effective.fleetName, effective.fleetAddress, scopeFor(effective));
+      }, effective.fleetName, effective.fleetAddress, scopeFor(effective), effective.stopMode);
     });
   });
   ipcMain.handle('bootstrap', async () => ({ version: app.getVersion(), network: C4_NETWORK, signer: await getAuthorizedSignerStatus(signerPath) }));
@@ -214,6 +215,11 @@ app.whenReady().then(() => {
       if (!Array.isArray(value) || value.length === 0) throw new Error('Save at least one fleet assignment');
       const validated = value.map((draft) => validateSupportedAutomationAssignment(draft, catalog, settings.playerProfile));
       const previous = database.listAutomationAssignments();
+      for (const assignment of previous.filter((candidate) => candidate.stopMode)) {
+        const replacement = validated.find((candidate) => candidate.fleetAddress === assignment.fleetAddress);
+        const unchanged = replacement && Object.entries(replacement).every(([key, field]) => JSON.stringify(assignment[key as keyof typeof replacement]) === JSON.stringify(field));
+        if (!unchanged) throw new Error(`Fleet ${assignment.fleetName} is stopping and cannot be edited or removed`);
+      }
       for (const candidate of validated.filter((assignment) => isCrossSystemTravelMode(assignment.travelMode))) {
         const active = previous.find((assignment) => assignment.fleetAddress === candidate.fleetAddress && assignment.enabled);
         if (active) throw new Error(`Pause ${candidate.fleetName} Automation before replacing its live assignment with cross-system travel`);
@@ -235,8 +241,7 @@ app.whenReady().then(() => {
         const signer = await getAuthorizedSignerStatus(signerPath);
         if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
         for (const assignment of assignments) {
-          if (assignment.enabled && assignment.status === 'running') continue;
-          if (assignment.status === 'paused') continue;
+          if (!shouldEnableSavedAssignment(assignment)) continue;
           if (isCrossSystemTravelMode(assignment.travelMode)) {
             const detail = 'Cross-system assignment saved locally; execution remains disabled until C4 fuel, routing, arrival, and return behavior has been validated';
             database.setAutomationBlocked(detail, assignment.fleetAddress);
@@ -262,6 +267,21 @@ app.whenReady().then(() => {
       database.recordAutomationActivity({ kind: 'disabled', detail });
       throw error;
     }
+  });
+  ipcMain.handle('automation:request-stop', async (_event, fleetAddress, mode) => {
+    if (typeof fleetAddress !== 'string' || fleetAddress.length < 1 || fleetAddress.length > 64) throw new Error('Invalid Fleet address');
+    if (mode !== 'now' && mode !== 'end-of-cycle') throw new Error('Invalid Automation stop mode');
+    const assignment = database.requestAutomationStop(mode, fleetAddress);
+    const timing = mode === 'now' ? 'immediately' : 'at the end of the current mining cycle';
+    database.recordAutomationActivity({
+      fleetAddress: assignment.fleetAddress,
+      fleetName: assignment.fleetName,
+      kind: 'waiting',
+      action: 'stop-automation',
+      detail: `Stop requested ${timing}; AEPA will return home, unload, refill, and then disable this assignment`,
+    });
+    scheduleAutomationTick(0);
+    return automationState();
   });
   ipcMain.handle('automation:set-enabled', async (_event, enabled) => {
     if (typeof enabled !== 'boolean') throw new Error('Automation enabled state must be boolean');
@@ -313,8 +333,15 @@ app.whenReady().then(() => {
         disable: async () => { database.setAutomationEnabled(false, fleetAddress); },
         resolve: async () => { await rawStore.resolveOperation(operation.id); },
       });
-      database.recordAutomationActivity({fleetAddress, fleetName:assignment.fleetName, kind:'disabled',
-        detail:`Operator reconciled ${operation.signature} (${operation.evidence}); current next step: ${nextStep}. Automation remains disabled; enable separately.`});
+      if (assignment.stopMode) {
+        database.setAutomationEnabled(true, fleetAddress);
+        database.recordAutomationActivity({fleetAddress, fleetName:assignment.fleetName, kind:'enabled', action:'stop-automation',
+          detail:`Operator reconciled ${operation.signature} (${operation.evidence}); current next step: ${nextStep}. Resuming the already-requested safe shutdown.`});
+        scheduleAutomationTick(0);
+      } else {
+        database.recordAutomationActivity({fleetAddress, fleetName:assignment.fleetName, kind:'disabled',
+          detail:`Operator reconciled ${operation.signature} (${operation.evidence}); current next step: ${nextStep}. Automation remains disabled; enable separately.`});
+      }
       return automationState();
     } finally { recoveringFleets.delete(fleetAddress); }
   });

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SavedAutomationAssignment } from './automation-assignment.js';
+import type { AutomationStopMode } from './automation-stop.js';
 import { DEFAULT_SETTINGS, type AppSettings, validateSettings } from './settings.js';
 
 export interface FleetRecord {
@@ -57,6 +58,8 @@ export interface AutomationAssignmentRecord extends SavedAutomationAssignment {
   lastError?: string;
   updatedAt: string;
   pendingAssignment?: SavedAutomationAssignment;
+  stopMode?: AutomationStopMode;
+  stopRequestedAt?: string;
 }
 
 export interface AutomationActivityRecord {
@@ -195,6 +198,13 @@ export class AepaDatabase {
     if (version < 6) {
       this.db.exec(`BEGIN; ALTER TABLE automation_assignment ADD COLUMN resource_ids_json TEXT;
         INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime('now')); COMMIT;`);
+    }
+    if (version < 7) {
+      this.db.exec(`BEGIN;
+        ALTER TABLE automation_assignment ADD COLUMN stop_mode TEXT CHECK (stop_mode IN ('now', 'end-of-cycle'));
+        ALTER TABLE automation_assignment ADD COLUMN stop_requested_at TEXT;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (7, datetime('now'));
+        COMMIT;`);
     }
   }
 
@@ -408,7 +418,8 @@ export class AepaDatabase {
         resource_name=excluded.resource_name, destination_address=excluded.destination_address,
         destination_name=excluded.destination_name, travel_mode=excluded.travel_mode,
         enabled=0, status='disabled', target_stop_at_unix_seconds=NULL,
-        last_action=NULL, last_error=NULL, pending_json=NULL, updated_at=excluded.updated_at
+        last_action=NULL, last_error=NULL, pending_json=NULL, stop_mode=NULL,
+        stop_requested_at=NULL, updated_at=excluded.updated_at
     `);
     const queue = this.db.prepare('UPDATE automation_assignment SET pending_json = ?, updated_at = ? WHERE fleet_address = ?');
     this.db.exec('BEGIN');
@@ -440,9 +451,9 @@ export class AepaDatabase {
     return this.listAutomationAssignments();
   }
 
-  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null }): AutomationAssignmentRecord {
-    const { targetStopAtUnixSeconds, pendingJson, resourceIdsJson, ...rest } = row;
-    return { ...rest, resourceIds: resourceIdsJson === null ? [row.resourceId] : JSON.parse(resourceIdsJson), enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }) };
+  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }): AutomationAssignmentRecord {
+    const { targetStopAtUnixSeconds, pendingJson, resourceIdsJson, stopMode, stopRequestedAt, ...rest } = row;
+    return { ...rest, resourceIds: resourceIdsJson === null ? [row.resourceId] : JSON.parse(resourceIdsJson), enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }), ...(stopMode === null ? {} : { stopMode }), ...(stopRequestedAt === null ? {} : { stopRequestedAt }) };
   }
 
   listAutomationAssignments(): AutomationAssignmentRecord[] {
@@ -454,9 +465,10 @@ export class AepaDatabase {
              travel_mode AS travelMode, enabled, status,
              target_stop_at_unix_seconds AS targetStopAtUnixSeconds,
              last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt,
-             pending_json AS pendingJson, resource_ids_json AS resourceIdsJson
+             pending_json AS pendingJson, resource_ids_json AS resourceIdsJson,
+             stop_mode AS stopMode, stop_requested_at AS stopRequestedAt
       FROM automation_assignment ORDER BY fleet_name COLLATE NOCASE, fleet_address
-    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null }>;
+    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }>;
     return rows.map((row) => this.mapAutomationAssignment(row));
   }
 
@@ -489,6 +501,30 @@ export class AepaDatabase {
       .run(enabled ? 1 : 0, enabled ? 'running' : 'disabled', new Date().toISOString(), selected);
     if (result.changes !== 1) throw new Error('Save an Automation assignment before changing its state');
     return this.getAutomationAssignment(selected)!;
+  }
+
+  requestAutomationStop(mode: AutomationStopMode, fleetAddress: string): AutomationAssignmentRecord {
+    if (mode !== 'now' && mode !== 'end-of-cycle') throw new Error('Invalid Automation stop mode');
+    const assignment = this.getAutomationAssignment(fleetAddress);
+    if (!assignment) throw new Error('Fleet Automation assignment was not found');
+    if (assignment.status === 'paused') throw new Error(`Fleet ${assignment.fleetName} must be reconciled before it can be stopped`);
+    if (!assignment.enabled || assignment.status !== 'running') throw new Error(`Fleet ${assignment.fleetName} Automation is not running`);
+    const requestedAt = new Date().toISOString();
+    this.db.prepare(`UPDATE automation_assignment SET stop_mode = ?, stop_requested_at = ?, pending_json = NULL, updated_at = ? WHERE fleet_address = ?`)
+      .run(mode, requestedAt, requestedAt, fleetAddress);
+    return this.getAutomationAssignment(fleetAddress)!;
+  }
+
+  completeAutomationStop(fleetAddress: string): AutomationAssignmentRecord {
+    const assignment = this.getAutomationAssignment(fleetAddress);
+    if (!assignment?.stopMode) throw new Error('No Automation stop request exists for this fleet');
+    const result = this.db.prepare(`UPDATE automation_assignment SET
+      enabled = 0, status = 'disabled', target_stop_at_unix_seconds = NULL,
+      pending_json = NULL, stop_mode = NULL, stop_requested_at = NULL,
+      last_action = 'stopped', last_error = NULL, updated_at = ? WHERE fleet_address = ?`)
+      .run(new Date().toISOString(), fleetAddress);
+    if (result.changes !== 1) throw new Error('Fleet Automation assignment disappeared while stopping');
+    return this.getAutomationAssignment(fleetAddress)!;
   }
 
   setAutomationTargetStop(value: bigint | undefined, fleetAddress?: string): void {

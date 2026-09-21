@@ -53,7 +53,7 @@
         <form id="automation-config" class="automation-config" hidden>
           <div class="assignment-columns compact-field-grid" aria-hidden="true">
             <span>Fleet</span><span>Assignment</span><span>Home Starbase<small>Region | System | Fleet distance</small></span><span>Travel</span>
-            <span>Mining Destination<small>Region | System | Asteroid belt | Home distance</small></span><span>Resources</span><span></span>
+            <span>Mining Destination<small>Region | System | Asteroid belt | Home distance</small></span><span>Resources</span><span>Actions</span>
           </div>
           <div id="automation-rows"></div>
           <div class="add-fleet-wrap"><button id="add-fleet" class="secondary" type="button">+ Add Fleet</button></div>
@@ -96,6 +96,16 @@
       <button id="keep-editing" class="secondary" type="button">Keep editing</button>
       <button id="discard-and-leave" class="danger" type="button">Discard and leave</button>
       <button id="save-and-leave" class="primary" type="button">Save and leave</button>
+    </div>
+  </dialog>
+  <dialog id="stop-dialog" class="warning-dialog" aria-labelledby="stop-title">
+    <h2 id="stop-title">Stop fleet Automation?</h2>
+    <p id="stop-message">Choose when mining should stop. AEPA will then return the fleet home, unload, refill, and disable its assignment.</p>
+    <p id="stop-unsaved-warning" class="dialog-warning" hidden>Unsaved Fleet Assignment changes will be discarded.</p>
+    <div class="dialog-actions">
+      <button id="cancel-stop" class="secondary" type="button">Cancel</button>
+      <button id="stop-end-cycle" class="secondary" type="button">Stop at end of cycle</button>
+      <button id="stop-now" class="danger" type="button">Stop now</button>
     </div>
   </dialog>
   <script type="module" src="app.js"></script>

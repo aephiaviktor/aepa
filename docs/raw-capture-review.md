@@ -172,3 +172,10 @@ MVP boundary: no additional recovery framework, archive retention system or
 oversized-response spooling before the first Windows validation. The existing
 8 MiB cap leaves oversized evidence pending and visible. Those enhancements are
 follow-ups, not new blockers invented for this local implementation.
+
+## 0.6.5 safe-stop integration
+
+A reconciled fleet with an existing durable operator stop request resumes only
+that requested shutdown after the explicit recovery confirmation. The dialog
+states this consequence. Without a stop request, recovery still leaves automation
+disabled. This does not add automatic replay or bypass unresolved-operation guards.

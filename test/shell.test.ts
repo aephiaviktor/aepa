@@ -170,6 +170,24 @@ test('Automation warns before navigation when assignment changes are unsaved', a
   assert.match(script, /beforeunload/);
 });
 
+test('active fleet rows expose a guarded durable stop dialog', async () => {
+  const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  const preload = await readFile(join(process.cwd(), 'electron/preload.cjs'), 'utf8');
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  assert.match(html, /id="stop-dialog"/);
+  assert.match(html, /id="stop-now"[^>]*>Stop now/);
+  assert.match(html, /id="stop-end-cycle"[^>]*>Stop at end of cycle/);
+  assert.match(html, /id="cancel-stop"[^>]*>Cancel/);
+  assert.match(script, /class="stop-fleet/);
+  assert.match(script, /requestAutomationStop/);
+  assert.match(script, /Stopping after current cycle/);
+  assert.match(script, /Reconciled — safe stop resumed/);
+  assert.match(preload, /automation:request-stop/);
+  assert.match(main, /automation:request-stop/);
+  assert.match(main, /Resuming the already-requested safe shutdown/);
+});
+
 test('Fleet and Player Profile addresses are full, selectable, and copyable', async () => {
   const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
   const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
