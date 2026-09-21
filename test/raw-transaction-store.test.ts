@@ -79,3 +79,18 @@ test('operation barrier blocks a different transaction for the same fleet but no
   store.beforeOperationSend({...input,signature:'c'},'fleet-a');
   store.close();
 });
+
+test('archive health separates pending evidence from unresolved operations and scopes profiles', () => {
+  const store=new RawTransactionStore(':memory:');
+  const input={network:'ptr',resetEpoch:'one',profile:'p',signature:'sig',wire:'AQ=='};
+  const id=store.beforeOperationSend(input,'fleet');
+  store.beforeSend({...input,profile:'other',signature:'other'});
+  assert.equal(store.health('ptr','p').pending,1);
+  assert.equal(store.health('ptr','p').unresolvedOperations,1);
+  store.recordResponse(id,'{"result":{"transaction":["AQ==","base64"],"meta":{}}}');
+  assert.equal(store.health('ptr','p').pending,0);
+  assert.equal(store.health('ptr','p').unresolvedOperations,1);
+  assert.equal(store.health('ptr','p').oldestPendingAt,null);
+  assert.ok(store.health('ptr','p').databaseBytes>0);
+  store.close();
+});

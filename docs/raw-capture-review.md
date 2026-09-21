@@ -126,3 +126,16 @@ visible without echoing credentials. 'response-received' deliberately does not
 claim complete metadata or resolved automation. Pending counts/oldest age,
 persistent health history, disk-space warnings and safe reconciliation remain
 unfinished. The 8 MiB cap bounds but does not remove main-thread JSON parsing.
+
+## Fourth correction: backlog and disk capacity
+
+Activity now requests archive statistics asynchronously from the SQLite worker:
+profile/network-scoped pending count, oldest pending timestamp, unresolved fleet
+operation count, and whole-archive database/WAL size plus available disk space.
+Less than 1 GiB available shows a warning; unavailable statistics are explicitly
+unknown. No history is deleted. Pending evidence and blocked operations are
+separate counts: fully collected metadata does not imply safe operation recovery.
+
+This adds visibility, not retention or automatic reconciliation. Worker health
+queries currently aggregate pending rows on demand; large-backlog benchmarking
+and cached health snapshots remain performance follow-ups.

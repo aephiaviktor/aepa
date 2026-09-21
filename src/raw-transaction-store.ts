@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, statfsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -16,7 +16,7 @@ export interface PendingRawSubmission extends RawSubmission { id: string }
  * integers and unknown fields must survive future decoder changes unchanged. */
 export class RawTransactionStore {
   private readonly db: DatabaseSync;
-  constructor(file: string) {
+  constructor(private readonly file: string) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -147,6 +147,21 @@ export class RawTransactionStore {
       const { attempts, ...submission } = row;
       return submission;
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  health(network: string, profile: string) {
+    const pending = this.db.prepare(`SELECT COUNT(*) AS count, MIN(created_at) AS oldest
+      FROM raw_submissions WHERE network=? AND profile=? AND collected=0`).get(network,profile)!;
+    const barriers = this.db.prepare('SELECT COUNT(*) AS count FROM raw_operation_barriers WHERE network=? AND profile=?').get(network,profile)!;
+    const pages = Number(this.db.prepare('PRAGMA page_count').get()!.page_count);
+    const pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size);
+    let freeDiskBytes: number | null = null;
+    let walBytes = 0;
+    if (this.file !== ':memory:') {
+      try { const fs = statfsSync(dirname(this.file)); freeDiskBytes = fs.bavail * fs.bsize; } catch { /* unavailable is not zero */ }
+      try { walBytes = statSync(`${this.file}-wal`).size; } catch { /* no WAL yet */ }
+    }
+    return { pending:Number(pending.count), oldestPendingAt:pending.oldest === null ? null : String(pending.oldest),
+      unresolvedOperations:Number(barriers.count), databaseBytes:pages*pageSize, walBytes, freeDiskBytes };
   }
   close(): void { this.db.close(); }
 }

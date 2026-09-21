@@ -36,9 +36,12 @@ let fleetSync: FleetSyncCoordinator<Awaited<ReturnType<typeof loadC4Fleets>>>;
 let catalogSync: CatalogSyncCoordinator;
 let signerPath: string;
 
-function automationState() {
+async function automationState() {
+  const settings = database.getSettings();
+  const archiveHealth = await rawStore.health(settings.network, settings.playerProfile).catch(() => null);
   const assignments = database.listAutomationAssignments();
   return {
+    archiveHealth,
     captureHealth: rawCapture?.health(),
     assignments: assignments.map((assignment) => ({
       ...assignment,

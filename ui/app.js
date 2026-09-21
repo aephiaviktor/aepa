@@ -493,6 +493,13 @@ function renderAutomationIssues(state) {
   capture.textContent = health
     ? `Raw transaction capture: ${health.status}. Last stored response: ${health.lastResponseAt ?? 'none this session'}.`
     : 'Raw transaction capture: status unavailable.';
+  const archive = state?.archiveHealth;
+  capture.textContent += archive
+    ? ` Pending evidence: ${archive.pending}; oldest: ${archive.oldestPendingAt ?? 'none'}; unresolved operations: ${archive.unresolvedOperations}. Archive: ${((archive.databaseBytes + archive.walBytes) / 1048576).toFixed(1)} MiB. Free disk: ${archive.freeDiskBytes === null ? 'unknown' : (archive.freeDiskBytes / 1073741824).toFixed(1) + ' GiB'}.`
+    : ' Archive statistics unavailable.';
+  if (archive?.freeDiskBytes !== null && archive?.freeDiskBytes < 1073741824) {
+    capture.textContent += ' WARNING: less than 1 GiB disk space remains; capture may fail. No history is automatically deleted.';
+  }
   const activity = state?.activity ?? [];
   $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
   const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
