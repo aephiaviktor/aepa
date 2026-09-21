@@ -2,7 +2,10 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const AEPA_EVENT_SCHEMA_VERSION = 1 as const;
+/** SQLite layout version; the additive public event envelope remains version 1. */
+export const AEPA_EVENT_SCHEMA_VERSION = 2 as const;
+const EVENT_ENVELOPE_VERSION = 1;
+
 
 export type AepaEventStatus = 'planned' | 'submitted' | 'confirmed' | 'finalized' | 'failed' | 'unknown';
 
@@ -11,8 +14,10 @@ export interface PlannedAepaEvent {
   network: string;
   resetEpoch: string;
   profile: string;
-  fleetAddress: string;
-  fleetName: string;
+  fleetAddress?: string;
+  fleetName?: string;
+  /** Ordered public instruction facts, never signer objects or secrets. */
+  instructions?: readonly { programAddress: string; accounts: readonly { address: string; role: number }[]; dataBase64: string }[];
   action: string;
   occurredAt: string;
   payload: unknown;
@@ -24,10 +29,11 @@ export interface AepaEventStatusChange {
   signature?: string;
   instructionIndex?: number;
   error?: string;
+  evidence?: unknown;
 }
 
 export interface AepaEventChange extends PlannedAepaEvent {
-  schemaVersion: typeof AEPA_EVENT_SCHEMA_VERSION;
+  schemaVersion: number;
   sequence: number;
   revision: number;
   status: AepaEventStatus;
@@ -35,6 +41,7 @@ export interface AepaEventChange extends PlannedAepaEvent {
   signature?: string;
   instructionIndex?: number;
   error?: string;
+  evidence?: unknown;
 }
 
 const allowedTransitions: Readonly<Record<AepaEventStatus, readonly AepaEventStatus[]>> = Object.freeze({
@@ -83,7 +90,10 @@ export class AepaEventStore {
     if (filePath !== ':memory:') mkdirSync(dirname(filePath), { recursive: true });
     this.db = new DatabaseSync(filePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-    this.migrate();
+    try { this.migrate(); } catch (error) {
+      this.db.close();
+      throw error;
+    }
     if (filePath !== ':memory:') {
       try { chmodSync(filePath, 0o600); } catch { /* Best effort on Windows. */ }
     }
@@ -97,6 +107,7 @@ export class AepaEventStore {
       );
     `);
     const version = Number((this.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number | null }).version ?? 0);
+    if (version > AEPA_EVENT_SCHEMA_VERSION) throw new Error(`AEPA event database schema ${version} is newer than supported ${AEPA_EVENT_SCHEMA_VERSION}`);
     if (version < 1) {
       this.db.exec(`
         BEGIN;
@@ -136,7 +147,19 @@ export class AepaEventStore {
         COMMIT;
       `);
     }
-    if (version > AEPA_EVENT_SCHEMA_VERSION) throw new Error(`AEPA event database schema ${version} is newer than supported ${AEPA_EVENT_SCHEMA_VERSION}`);
+    if (version < 2) {
+      // Existing local v1 rows keep their original schema marker and facts.
+      // A collision aborts migration rather than silently discarding history.
+      this.db.exec(`BEGIN IMMEDIATE;
+        DROP INDEX events_chain_identity_idx;
+        CREATE UNIQUE INDEX events_chain_identity_idx ON events(network, reset_epoch, signature)
+          WHERE signature IS NOT NULL;
+        ALTER TABLE events ADD COLUMN instructions_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE event_changes ADD COLUMN evidence_json TEXT;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
+        COMMIT;`);
+    }
+
   }
 
   recordPlanned(input: PlannedAepaEvent): AepaEventChange {
@@ -145,17 +168,18 @@ export class AepaEventStore {
       network: requiredText(input.network, 'network', 64),
       resetEpoch: requiredText(input.resetEpoch, 'resetEpoch', 128),
       profile: requiredText(input.profile, 'profile', 128),
-      fleetAddress: requiredText(input.fleetAddress, 'fleetAddress', 128),
-      fleetName: requiredText(input.fleetName, 'fleetName', 256),
+      fleetAddress: input.fleetAddress === undefined ? '' : requiredText(input.fleetAddress, 'fleetAddress', 128),
+      fleetName: input.fleetName === undefined ? '' : requiredText(input.fleetName, 'fleetName', 256),
       action: requiredText(input.action, 'action', 64),
       occurredAt: isoTimestamp(input.occurredAt, 'occurredAt'),
       payloadJson: canonicalJson(input.payload),
+      instructionsJson: canonicalJson(input.instructions ?? []),
     };
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const existing = this.db.prepare(`SELECT event_id AS eventId, network, reset_epoch AS resetEpoch,
         profile, fleet_address AS fleetAddress, fleet_name AS fleetName, action, occurred_at AS occurredAt,
-        payload_json AS payloadJson FROM events WHERE event_id = ?`).get(normalized.eventId) as typeof normalized | undefined;
+        payload_json AS payloadJson, instructions_json AS instructionsJson FROM events WHERE event_id = ?`).get(normalized.eventId) as typeof normalized | undefined;
       if (existing) {
         if (JSON.stringify(existing) !== JSON.stringify(normalized)) throw new Error(`eventId ${normalized.eventId} already exists with different facts`);
         const latest = this.latestChange(normalized.eventId);
@@ -163,11 +187,11 @@ export class AepaEventStore {
         return latest;
       }
       this.db.prepare(`INSERT INTO events(event_id, schema_version, network, reset_epoch, profile,
-        fleet_address, fleet_name, action, occurred_at, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        normalized.eventId, AEPA_EVENT_SCHEMA_VERSION, normalized.network, normalized.resetEpoch,
+        fleet_address, fleet_name, action, occurred_at, payload_json, instructions_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        normalized.eventId, EVENT_ENVELOPE_VERSION, normalized.network, normalized.resetEpoch,
         normalized.profile, normalized.fleetAddress, normalized.fleetName, normalized.action,
-        normalized.occurredAt, normalized.payloadJson,
+        normalized.occurredAt, normalized.payloadJson, normalized.instructionsJson,
       );
       this.db.prepare(`INSERT INTO event_changes(event_id, revision, status, changed_at)
         VALUES (?, 1, 'planned', ?)`).run(normalized.eventId, normalized.occurredAt);
@@ -196,11 +220,14 @@ export class AepaEventStore {
       const current = this.latestChange(selected);
       const signature = suppliedSignature ?? event.signature ?? undefined;
       const instructionIndex = suppliedIndex ?? event.instructionIndex ?? (signature ? 0 : undefined);
-      if (current.status === status && current.signature === signature && current.instructionIndex === instructionIndex) {
+      const evidenceJson = canonicalJson(change.evidence ?? current.evidence ?? null);
+      const errorText = change.error === undefined ? current.error ?? null : String(change.error).slice(0, 2_000);
+      if (current.status === status && current.signature === signature && current.instructionIndex === instructionIndex &&
+          evidenceJson === canonicalJson(current.evidence ?? null) && errorText === (current.error ?? null)) {
         this.db.exec('COMMIT');
         return current;
       }
-      if (!allowedTransitions[current.status].includes(status)) throw new Error(`Invalid event status transition ${current.status} -> ${status}`);
+      if (current.status !== status && !allowedTransitions[current.status].includes(status)) throw new Error(`Invalid event status transition ${current.status} -> ${status}`);
       if (['submitted', 'confirmed', 'finalized'].includes(status) && !signature) throw new Error(`${status} requires a transaction signature`);
       if (event.signature && signature !== event.signature) throw new Error('Transaction signature cannot change after submission');
       if (event.instructionIndex !== null && instructionIndex !== event.instructionIndex) throw new Error('Instruction index cannot change after submission');
@@ -208,10 +235,10 @@ export class AepaEventStore {
         this.db.prepare('UPDATE events SET signature = ?, instruction_index = ? WHERE event_id = ?')
           .run(signature, instructionIndex ?? 0, selected);
       }
-      this.db.prepare(`INSERT INTO event_changes(event_id, revision, status, changed_at, signature, instruction_index, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      this.db.prepare(`INSERT INTO event_changes(event_id, revision, status, changed_at, signature, instruction_index, error, evidence_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
         selected, current.revision + 1, status, changedAt, signature ?? null, instructionIndex ?? null,
-        change.error === undefined ? null : String(change.error).slice(0, 2_000),
+        errorText, evidenceJson,
       );
       const recorded = this.latestChange(selected);
       this.db.exec('COMMIT');
@@ -226,17 +253,21 @@ export class AepaEventStore {
     const cursor = Number.isSafeInteger(afterSequence) && afterSequence >= 0 ? afterSequence : 0;
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 2_000);
     const rows = this.db.prepare(`SELECT c.sequence, c.revision, c.status, c.changed_at AS changedAt,
-      c.signature, c.instruction_index AS instructionIndex, c.error,
+      c.signature, c.instruction_index AS instructionIndex, c.error, c.evidence_json AS evidenceJson,
       e.event_id AS eventId, e.schema_version AS schemaVersion, e.network, e.reset_epoch AS resetEpoch,
       e.profile, e.fleet_address AS fleetAddress, e.fleet_name AS fleetName, e.action,
-      e.occurred_at AS occurredAt, e.payload_json AS payloadJson
+      e.occurred_at AS occurredAt, e.payload_json AS payloadJson, e.instructions_json AS instructionsJson
       FROM event_changes c JOIN events e ON e.event_id = c.event_id
-      WHERE c.sequence > ? ORDER BY c.sequence ASC LIMIT ?`).all(cursor, safeLimit) as Array<Omit<AepaEventChange, 'payload' | 'signature' | 'instructionIndex' | 'error'> & {
-        payloadJson: string; signature: string | null; instructionIndex: number | null; error: string | null;
+      WHERE c.sequence > ? ORDER BY c.sequence ASC LIMIT ?`).all(cursor, safeLimit) as Array<Omit<AepaEventChange, 'payload' | 'instructions' | 'evidence' | 'signature' | 'instructionIndex' | 'error'> & {
+        payloadJson: string; instructionsJson: string; evidenceJson: string | null; signature: string | null; instructionIndex: number | null; error: string | null;
       }>;
-    return rows.map(({ payloadJson, signature, instructionIndex, error, ...row }) => ({
+    return rows.map(({ payloadJson, instructionsJson, evidenceJson, signature, instructionIndex, error, ...row }) => ({
       ...row,
       payload: JSON.parse(payloadJson),
+      instructions: JSON.parse(instructionsJson),
+      fleetAddress: row.fleetAddress || undefined,
+      fleetName: row.fleetName || undefined,
+      ...(evidenceJson === null || evidenceJson === 'null' ? {} : { evidence: JSON.parse(evidenceJson) }),
       ...(signature === null ? {} : { signature }),
       ...(instructionIndex === null ? {} : { instructionIndex }),
       ...(error === null ? {} : { error }),
@@ -251,17 +282,21 @@ export class AepaEventStore {
 
   private listChangesForEvent(eventId: string, limit: number): AepaEventChange[] {
     const rows = this.db.prepare(`SELECT c.sequence, c.revision, c.status, c.changed_at AS changedAt,
-      c.signature, c.instruction_index AS instructionIndex, c.error,
+      c.signature, c.instruction_index AS instructionIndex, c.error, c.evidence_json AS evidenceJson,
       e.event_id AS eventId, e.schema_version AS schemaVersion, e.network, e.reset_epoch AS resetEpoch,
       e.profile, e.fleet_address AS fleetAddress, e.fleet_name AS fleetName, e.action,
-      e.occurred_at AS occurredAt, e.payload_json AS payloadJson
+      e.occurred_at AS occurredAt, e.payload_json AS payloadJson, e.instructions_json AS instructionsJson
       FROM event_changes c JOIN events e ON e.event_id = c.event_id
-      WHERE c.event_id = ? ORDER BY c.revision DESC LIMIT ?`).all(eventId, limit) as Array<Omit<AepaEventChange, 'payload' | 'signature' | 'instructionIndex' | 'error'> & {
-        payloadJson: string; signature: string | null; instructionIndex: number | null; error: string | null;
+      WHERE c.event_id = ? ORDER BY c.revision DESC LIMIT ?`).all(eventId, limit) as Array<Omit<AepaEventChange, 'payload' | 'instructions' | 'evidence' | 'signature' | 'instructionIndex' | 'error'> & {
+        payloadJson: string; instructionsJson: string; evidenceJson: string | null; signature: string | null; instructionIndex: number | null; error: string | null;
       }>;
-    return rows.map(({ payloadJson, signature, instructionIndex, error, ...row }) => ({
+    return rows.map(({ payloadJson, instructionsJson, evidenceJson, signature, instructionIndex, error, ...row }) => ({
       ...row,
       payload: JSON.parse(payloadJson),
+      instructions: JSON.parse(instructionsJson),
+      fleetAddress: row.fleetAddress || undefined,
+      fleetName: row.fleetName || undefined,
+      ...(evidenceJson === null || evidenceJson === 'null' ? {} : { evidence: JSON.parse(evidenceJson) }),
       ...(signature === null ? {} : { signature }),
       ...(instructionIndex === null ? {} : { instructionIndex }),
       ...(error === null ? {} : { error }),
