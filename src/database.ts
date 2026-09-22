@@ -1,3 +1,4 @@
+import { installAssignmentHistory } from './assignment-history.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -81,6 +82,7 @@ export class AepaDatabase {
     this.db = new DatabaseSync(filePath);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.migrate();
+    installAssignmentHistory(this.db);
   }
 
   private migrate(): void {
