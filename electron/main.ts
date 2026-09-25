@@ -3,6 +3,7 @@ import { recoverPausedOperation } from '../src/operator-recovery.js';
 import { RawStoreWorker } from '../src/raw-store-worker.js';
 import { RawCaptureRuntime, configureRawCapture } from '../src/raw-capture-runtime.js';
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadMiningAutomationCatalog } from '../src/automation-catalog.js';
@@ -15,6 +16,7 @@ import { FleetSyncCoordinator } from '../src/fleet-sync.js';
 import { CatalogSyncCoordinator } from '../src/catalog-sync.js';
 import { isPostSubmissionFailure } from '../src/automatic-c4.js';
 import { C4_NETWORK } from '../src/network.js';
+import { getAtlasKitVersionStatus } from '../src/atlas-kit-version.js';
 import { authorizeSignerStatus, getSignerStatus, removeStoredSigner, storeAuthorizedSigner, withStoredSigner, type SignerStatus } from '../src/signer-store.js';
 
 // Proven Electron-on-Windows configuration used by GM/LM Market Bots: software
@@ -29,6 +31,9 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const atlasKitPackage = JSON.parse(readFileSync(path.join(here, '../../node_modules/@aephia/atlas-kit/package.json'), 'utf8')) as { version: string };
+let atlasKitStatusPromise: ReturnType<typeof getAtlasKitVersionStatus> | undefined;
+const atlasKitStatus = () => atlasKitStatusPromise ??= getAtlasKitVersionStatus(atlasKitPackage.version);
 let database: AepaDatabase;
 let rawStore: RawStoreWorker;
 let rawCapture: RawCaptureRuntime;
@@ -179,7 +184,12 @@ app.whenReady().then(() => {
       }, effective.fleetName, effective.fleetAddress, scopeFor(effective), effective.stopMode);
     });
   });
-  ipcMain.handle('bootstrap', async () => ({ version: app.getVersion(), network: C4_NETWORK, signer: await getAuthorizedSignerStatus(signerPath) }));
+  ipcMain.handle('bootstrap', async () => ({
+    version: app.getVersion(),
+    network: C4_NETWORK,
+    signer: await getAuthorizedSignerStatus(signerPath),
+    atlasKit: await atlasKitStatus(),
+  }));
   ipcMain.handle('signer:store', async (_event, plaintext, replace) => {
     if (typeof plaintext !== 'string' || plaintext.length < 2 || plaintext.length > 4096) throw new Error('Enter a valid 32- or 64-byte JSON private key');
     const expectedPublicKey = await getActiveC4ProfileAuthority(database.getSettings());

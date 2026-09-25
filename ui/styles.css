@@ -149,6 +149,8 @@ input:disabled, select:disabled { opacity: .58; }
 .drawer label { display: grid; gap: 6px; margin: 13px 0; color: #86b1c9; font-size: 11px; }
 .notice { color: #72a0ba; font-size: 10px; line-height: 1.45; }
 .form-state { min-height: 18px; color: #67e5dd; font-size: 11px; }
+.form-state.success { color: #67e5dd; }
+.form-state.warning { color: #ffc472; }
 .signer-actions { display: flex; gap: 9px; }
 .signer-actions button { flex: 1; }
 .signer-settings input { font-family: ui-monospace, SFMono-Regular, monospace; }

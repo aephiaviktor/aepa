@@ -20,6 +20,21 @@ function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
 }
 
+function renderAtlasKitStatus(status) {
+  $('atlas-kit-version').textContent = `Bundled version: ${status?.bundled || 'unknown'}`;
+  const element = $('atlas-kit-status');
+  if (status?.current === true) {
+    element.textContent = `Current npm next release (${status.latest})`;
+    element.className = 'form-state success';
+  } else if (status?.current === false) {
+    element.textContent = `Update available: ${status.latest}. Build, test, and deploy a new AEPA release.`;
+    element.className = 'form-state warning';
+  } else {
+    element.textContent = `Latest version could not be checked${status?.error ? `: ${status.error}` : ''}`;
+    element.className = 'form-state warning';
+  }
+}
+
 async function copyAddress(button, value) {
   if (!value) return;
   const original = button.textContent;
@@ -695,6 +710,7 @@ async function boot() {
   settings = loadedSettings;
   $('version').textContent = `v${bootstrap.version}`;
   $('network').textContent = bootstrap.network.label;
+  renderAtlasKitStatus(bootstrap.atlasKit);
   renderSignerStatus(bootstrap.signer);
   $('rpc-url').value = settings.rpcUrl;
   $('player-profile').value = settings.playerProfile;

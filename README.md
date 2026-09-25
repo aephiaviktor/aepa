@@ -102,3 +102,15 @@ stale prerelease. Development API guidance comes from
 The default RPC endpoint is `https://testnet-rpc.z.ink`. A custom HTTP(S)
 endpoint can be selected in Settings. Player Profile addresses are public
 on-chain identifiers; wallet secrets do not belong in AEPA's settings database.
+
+## Atlas Kit freshness
+
+AEPA declares `@aephia/atlas-kit` as `next`. Every build resolves npm's current
+`next` tag and fails closed unless `package.json`, `package-lock.json`, and the
+installed package agree. `npm run release:check` is the required release gate.
+
+The scheduled **Atlas Kit next freshness** workflow checks daily. When npm's
+`next` tag moves, it updates the lockfile, runs typechecking and the full test
+suite, and opens or refreshes a dependency pull request. The running app shows
+its bundled version and npm's current `next` version in Settings. It never
+hot-swaps SDK code inside a running automation process.

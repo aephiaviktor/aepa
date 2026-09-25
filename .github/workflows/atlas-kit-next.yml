@@ -1,0 +1,54 @@
+name: Atlas Kit next freshness
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: atlas-kit-next-update
+  cancel-in-progress: false
+
+jobs:
+  update-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Resolve current next tag
+        run: npm run atlas-kit:update
+      - name: Verify AEPA against resolved Atlas Kit
+        run: |
+          npm run typecheck
+          npm test
+      - name: Open or refresh dependency update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo 'Atlas Kit is already current.'
+            exit 0
+          fi
+          VERSION=$(node -p "require('./node_modules/@aephia/atlas-kit/package.json').version")
+          BRANCH=chore/atlas-kit-next
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$BRANCH"
+          git add package-lock.json
+          git commit -m "Update Atlas Kit to $VERSION"
+          git push --force origin "HEAD:$BRANCH"
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "Update Atlas Kit to $VERSION" --body "Automated daily Atlas Kit next refresh. Full AEPA typecheck and test suite passed before this PR was updated."
+          else
+            gh pr create --base main --head "$BRANCH" --title "Update Atlas Kit to $VERSION" --body "Automated daily Atlas Kit next refresh. Full AEPA typecheck and test suite passed before this PR was opened."
+          fi
