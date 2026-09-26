@@ -1,3 +1,6 @@
+import { travelFuelBudget } from './scanning-logistics.js';
+import { scanSectorRegion } from './scanning-regions.js';
+import { validateScanSector } from './scanning-model.js';
 import type { MiningAutomationCatalog } from './automation-catalog.js';
 import { isRoundTripReachable, type TravelMode } from './automation-options.js';
 import { assertMiningResourcesAvailable } from './mining-research.js';
@@ -10,13 +13,16 @@ export interface AutomationAssignmentInput {
   resourceIds?: number[];
   destinationAddress: string;
   travelMode: string;
+  scanPatternId?: number;
+  scanSectorX?: number;
+  scanSectorY?: number;
 }
 
 export interface SavedAutomationAssignment {
   profile: string;
   fleetAddress: string;
   fleetName: string;
-  assignment: 'mining';
+  assignment: 'mining' | 'scanning';
   homeSystemAddress: string;
   homeSystemId: number;
   homeSystemName: string;
@@ -25,6 +31,9 @@ export interface SavedAutomationAssignment {
   resourceName: string;
   destinationAddress: string;
   destinationName: string;
+  scanPatternId?: number;
+  scanSectorX?: number;
+  scanSectorY?: number;
   travelMode: 'auto' | 'same-system' | 'subwarp' | 'warp' | 'warp-lane';
 }
 
@@ -56,9 +65,29 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   const input = value as Partial<AutomationAssignmentInput>;
   const fleet = catalog.fleets.find((candidate) => candidate.address === input.fleetAddress);
   if (!fleet) throw new Error('Select a fleet from the current C4 catalog');
-  if (input.assignment !== 'mining') throw new Error('Automatic execution currently supports only Mining');
+  if (input.assignment !== 'mining' && input.assignment !== 'scanning') throw new Error('Select Mining or Scanning');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
   if (!home) throw new Error('Select a Home Starbase in the configured faction');
+  if (input.assignment === 'scanning') {
+    const sector = validateScanSector(input.scanSectorX, input.scanSectorY);
+    const region = scanSectorRegion(catalog.scanRegions ?? [], sector.x, sector.y);
+    if (!region?.available) throw new Error(region?.requirement ?? 'Scan Sector is outside the available region catalog');
+    const pattern = catalog.scanPatterns?.find(value => value.id === input.scanPatternId);
+    if (!pattern || !pattern.available) throw new Error(pattern?.requirement ?? 'Select an available Scan Pattern');
+    if (input.travelMode !== 'warp' && input.travelMode !== 'subwarp') throw new Error('Scanning supports Warp or Subwarp only');
+    if (!isRoundTripReachable(input.travelMode, Math.hypot(sector.x - home.coordinates.x, sector.y - home.coordinates.y), fleet.travel)) {
+      throw new Error('Scan Sector is outside this Fleet’s round-trip range');
+    }
+    if (input.travelMode === 'subwarp' && travelFuelBudget(home.coordinates, sector, home.coordinates, fleet.travel.subwarpFuelConsumptionRate) > BigInt(fleet.travel.fuelCapacityRaw)) {
+      throw new Error('Scan Sector exceeds round-trip fuel capacity including the return reserve');
+    }
+    return { profile, fleetAddress: fleet.address, fleetName: fleet.name, assignment: 'scanning',
+      homeSystemAddress: home.systemAddress, homeSystemId: home.systemId, homeSystemName: home.systemName,
+      scanPatternId: pattern.id, scanSectorX: sector.x, scanSectorY: sector.y, travelMode: input.travelMode,
+      resourceId: 0, resourceIds: [], resourceName: pattern.name,
+      destinationAddress: '', destinationName: `Scan sector (${sector.x}, ${sector.y})`,
+    };
+  }
   const ids = input.resourceIds ?? [input.resourceId];
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > 8 || new Set(ids).size !== ids.length || ids.some(id => !Number.isSafeInteger(id))) throw new Error('Select one to eight unique resources');
   const resources = ids.map(id => {

@@ -179,3 +179,11 @@ input:disabled, select:disabled { opacity: .58; }
 .warning-dialog p { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .warning-dialog .dialog-warning { color: #ffc472; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+/* Native hidden wins over reusable field-grid display rules. */
+[hidden] { display: none !important; }
+.scanning-field input { width: 100%; min-width: 0; }
+.scan-costs { grid-column: 1 / -1; }
+
+.automation-fleet-row.scanning .compact-field-grid { grid-template-columns: 1.05fr .72fr 1.1fr .5fr .5fr 1.1fr .9fr 112px; }
+@media (max-width: 1250px) { .automation-fleet-row.scanning .compact-field-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

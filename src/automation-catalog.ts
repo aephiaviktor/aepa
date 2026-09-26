@@ -1,6 +1,9 @@
+import { loadScanningRegions, type ScanningRegion } from './scanning-regions.js';
 import { createSageClient, resolveCargo } from '@aephia/atlas-kit';
 import { profileFaction } from '@aephia/atlas-kit/bindings';
 import { getTerritoryRegions } from '@aephia/atlas-kit/factions';
+import { getScanPatterns, maybeGetScanPatternPolicy } from '@aephia/atlas-kit/scanning';
+import { scanningPatternOption, type ScanningPatternOption } from './scanning-model.js';
 import { getResearchCatalog } from '@aephia/atlas-kit/identity';
 import { getAsteroids } from '@aephia/atlas-kit/world';
 import { address, createSolanaRpc, getAddressEncoder, getBytesEncoder, getProgramDerivedAddress } from '@solana/kit';
@@ -16,6 +19,7 @@ export interface MiningAutomationCatalog {
     address: string;
     name: string;
     state: string;
+    scanCost?: number;
     location: { x: number; y: number };
     travel: { fuelCapacityRaw: string; maxWarpDistance: number; subwarpFuelConsumptionRate: number; warpFuelConsumptionRate: number };
   }[];
@@ -31,6 +35,8 @@ export interface MiningAutomationCatalog {
   }[];
   resources: readonly { id: number; name: string; available: boolean; requirement?: string }[];
   destinations: readonly MiningDestinationCandidate[];
+  scanRegions?: readonly ScanningRegion[];
+  scanPatterns?: readonly ScanningPatternOption[];
   mode: 'configuration-preview';
 }
 
@@ -77,12 +83,13 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
   const sage = createSageClient({ cluster: 'zink-ptr', rpc });
   try {
     const profile = address(settings.playerProfile);
-    const [faction, character, territory, systems, research] = await Promise.all([
+    const [faction, character, territory, systems, research, patterns] = await Promise.all([
       loadProfileFaction(rpc, profile),
       sage.characters.forProfile(profile, READ_OPTIONS),
       getTerritoryRegions(sage.context, READ_OPTIONS),
       sage.systems.all(READ_OPTIONS),
       getResearchCatalog(sage.context),
+      getScanPatterns(sage.context, READ_OPTIONS),
     ]);
     const [fleets, playerStarbases] = await Promise.all([
       character.fleets.all(READ_OPTIONS),
@@ -138,12 +145,18 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
         registered: registeredSystems.has(String(system.address)),
       }] : [];
     }));
+    const scanPatterns = await mapWithConcurrency(patterns, 4, async pattern => scanningPatternOption(pattern,
+      await maybeGetScanPatternPolicy(sage.context, pattern.id, READ_OPTIONS), character.modifiers.values.researchTags));
+    scanPatterns.sort((a, b) => Number(b.name === 'Broad Spectrum') - Number(a.name === 'Broad Spectrum') || a.id - b.id);
     return {
+      scanRegions: await loadScanningRegions(sage.context, rpc, character.modifiers.values.researchTags),
+      scanPatterns,
       faction,
       fleets: fleets.map((fleet) => ({
         address: fleet.address,
         name: fleet.name,
         state: fleet.state.kind,
+        scanCost: fleet.stats.misc.scanCost,
         location: fleet.location,
         travel: {
           fuelCapacityRaw: fleet.capacities.fuel.total.toString(),

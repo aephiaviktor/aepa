@@ -128,6 +128,15 @@ export async function signAndSendTransactionOnce(
   const signature = getSignatureFromTransaction(signedTransaction);
   onProgress?.('transaction-signed', { signature });
 
+  return sendSignedWireOnce(rpc, wire, signature, onProgress, recorder);
+}
+
+/** Shared wire boundary for locally signed transactions and guarded SDK Plans. */
+export async function sendSignedWireOnce(
+  rpc: SendOnlyRpc, wire: Base64EncodedWireTransaction, signature: string,
+  onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  recorder?: RawSendRecorder,
+): Promise<SingleSendResult> {
   // A failed durable write must stop before the network boundary.
   await recorder?.beforeSend({ wire, signature });
   onProgress?.('send-starting', { signature });

@@ -75,7 +75,7 @@ export class AutomaticCopperRunner {
         const marker = `waiting:${outcome.untilUnixSeconds.toString()}`;
         if (assignment.lastAction !== marker) {
           this.database.setAutomationLastAction(marker, assignment.fleetAddress);
-          this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: 'stop-mining', detail: outcome.detail });
+          this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: assignment.assignment === 'scanning' ? 'scanning' : 'stop-mining', detail: outcome.detail });
         }
         return { kind: 'waiting', untilUnixSeconds: outcome.untilUnixSeconds };
       }

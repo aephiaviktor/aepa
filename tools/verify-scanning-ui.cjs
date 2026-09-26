@@ -1,0 +1,31 @@
+const {chromium}=require(process.env.AEPA_PLAYWRIGHT_MODULE || 'playwright-core');
+const http=require('node:http');const fs=require('node:fs');const path=require('node:path');const assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'..');
+const server=http.createServer((req,res)=>{const file=path.join(root,decodeURIComponent(req.url.split('?')[0]));if(!file.startsWith(root+'/')){res.writeHead(403).end();return;}try {const body=fs.readFileSync(file);res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.html')?'text/html':'application/octet-stream');res.end(body);}catch{res.writeHead(404).end();}});
+(async()=>{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const browser=await chromium.launch({headless:true,...(process.env.AEPA_CHROMIUM_PATH ? {executablePath:process.env.AEPA_CHROMIUM_PATH}:{}),args:['--no-sandbox']});try{
+ const page=await browser.newPage({viewport:{width:1600,height:1000}});const errors=[];page.on('pageerror',error=>errors.push(String(error)));
+ await page.route('**/*',route=>route.request().url().startsWith('http://127.0.0.1:')?route.continue():route.abort());
+ await page.addInitScript(()=>{
+ const region={id:1,available:true,border:[[-10,-10],[10,-10],[10,10],[-10,10]].map(([x,y])=>({xRaw:(BigInt(x)*(1n<<56n)).toString(),yRaw:(BigInt(y)*(1n<<56n)).toString()}))};
+ const catalog={faction:'ustur',fleets:[{address:'fleet',name:'MF-01',state:'mining',scanCost:3,location:{x:0,y:0},travel:{fuelCapacityRaw:'1000',maxWarpDistance:10,subwarpFuelConsumptionRate:1,warpFuelConsumptionRate:1}}],homeStarbases:[{systemAddress:'home',systemId:1,systemName:'Home',regionId:1,regionOwner:'ustur',coordinates:{x:0,y:0},registered:true}],resources:[{id:311,name:'Copper',available:true}],destinations:[{address:'belt',name:'Belt',systemAddress:'home',systemName:'Home',systemFaction:'ustur',coordinates:{x:0,y:0},regionId:1,regionOwner:'ustur',resourceIds:[311]}],scanRegions:[region],scanPatterns:[{id:9,name:'Broad Spectrum',available:true,costs:[{cargoId:1,name:'Food',multiplierRaw:'32768'}]},{id:10,name:'Deep',available:false,requirement:'Requires research tag 7',costs:[{cargoId:8,name:'Data',multiplierRaw:'65536'}]}]};
+window.aepa={bootstrap:async()=>({version:'0.6.7',network:{label:'Offline UI test'},signer:{configured:false},atlasKit:{bundled:'0.6.0-next.64',latest:'0.6.0-next.64',current:true}}),getSettings:async()=>({playerProfile:'profile',rpcUrl:'https://invalid.example',refreshIntervalSeconds:30}),getFleetSnapshot:async()=>({fleets:[],sync:{status:'never'}}),getAutomationState:async()=>({assignments:[],activity:[],recoveryOperations:[]}),loadAutomationCatalog:async()=>catalog};
+ });
+ await page.goto(`http://127.0.0.1:${server.address().port}/ui/index.html`);await page.click('#show-automation');
+ await page.waitForSelector('[data-field="fleet"]');assert.equal(await page.locator('[data-field="fleet"] option').first().textContent(),'MF-01');
+ await page.selectOption('[data-field="assignment"]','scanning');
+ assert.equal(await page.locator('[data-field="scan-pattern"]').inputValue(),'9');
+ await page.fill('[data-field="scan-x"]','-2');await page.fill('[data-field="scan-y"]','3');
+ assert.equal(await page.locator('#save-assignment').isEnabled(),true);
+ assert.equal(await page.locator('[data-field="scan-pattern"] option[value="10"]').isDisabled(),true);
+ assert.equal(await page.locator('[data-field="travel"] option[value="warp"]').isDisabled(),true);
+ assert.deepEqual(await page.locator('[data-field="travel"] option').evaluateAll(options=>options.map(o=>o.value)),['subwarp','warp']);
+ const order=await page.locator('.automation-fleet-row [data-field]').evaluateAll(elements=>elements.filter(el=>el.offsetParent!==null).map(el=>el.dataset.field));
+ assert.deepEqual(order,['fleet','assignment','home','scan-x','scan-y','scan-pattern','travel']);
+ assert.match(await page.locator('.scan-costs').textContent(),/Food: 2 \/ scan/);
+ await page.fill('[data-field="scan-y"]','3.5');assert.equal(await page.locator('#save-assignment').isDisabled(),true);
+ await page.fill('[data-field="scan-y"]','30');assert.equal(await page.locator('#save-assignment').isDisabled(),true);
+ await page.fill('[data-field="scan-y"]','3');
+ await page.screenshot({path:process.env.AEPA_SCREENSHOT_PATH || require('node:os').tmpdir()+'/aepa-scanning-ui.png',fullPage:true});
+ await page.selectOption('[data-field="assignment"]','mining');assert.equal(await page.locator('[data-field="fleet"] option').first().textContent(),'MF-01');assert.equal(await page.locator('[data-field="scan-x"]').isVisible(),false);
+ assert.equal(errors.length,0,errors.join('\n'));console.log('Browser PASS: plain labels both modes, actual Broad Spectrum first, signed X/Y, region validation, dynamic costs, research lock, scanning field order, Warp disabled, mining switch, no page errors.');
+ }finally{await browser.close();server.close();}})().catch(error=>{console.error(error);server.close();process.exitCode=1;});

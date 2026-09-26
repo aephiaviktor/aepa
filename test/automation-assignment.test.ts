@@ -57,3 +57,21 @@ test('rejects a resource blocked by current research progression', () => {
     /Rare Mineral Discoveries.*Mining level 5/i,
   );
 });
+
+test('scanning persists the selected SDK pattern and signed sector, never a movement pattern', () => {
+  const scans = { ...catalog, scanRegions: [{id:1,available:true,border:[[-128,-128],[127,-128],[127,127],[-128,127]].map(([x,y])=>({xRaw:(BigInt(x)*(1n<<56n)).toString(),yRaw:(BigInt(y)*(1n<<56n)).toString()}))}], scanPatterns: [{ id: 0, name: 'Broad Spectrum', available: true, costs: [] }] };
+  const scan = { ...input, assignment: 'scanning', travelMode: 'subwarp', scanPatternId: 0, scanSectorX: -1, scanSectorY: 0 };
+  // Give the signed destination sufficient fuel capacity.
+  scans.fleets = scans.fleets.map(fleet => ({...fleet, travel: {...fleet.travel, fuelCapacityRaw: '1000'}}));
+  const saved = validateSupportedAutomationAssignment(scan, scans, 'profile-1');
+  assert.equal(saved.scanSectorX, -1);
+  assert.equal(saved.scanPatternId, 0);
+  assert.equal(saved.resourceName, 'Broad Spectrum');
+  for (const travelMode of ['auto','same-system','warp-lane']) assert.throws(() => validateSupportedAutomationAssignment({...scan, travelMode}, scans, 'profile-1'), /Warp or Subwarp/);
+  assert.throws(() => validateSupportedAutomationAssignment({...scan, scanPatternId: 99}, scans, 'profile-1'), /Scan Pattern/);
+});
+
+test('scanning refuses a route that fits nominal fuel but leaves no rounding reserve',()=>{
+  const scans={...catalog,scanRegions:[{id:1,available:true,border:[[0,0],[100,0],[100,100],[0,100]].map(([x,y])=>({xRaw:(BigInt(x)*(1n<<56n)).toString(),yRaw:(BigInt(y)*(1n<<56n)).toString()}))}],scanPatterns:[{id:0,name:'Broad Spectrum',available:true,costs:[]}]};
+  assert.throws(()=>validateSupportedAutomationAssignment({...input,assignment:'scanning',travelMode:'subwarp',scanPatternId:0,scanSectorX:90,scanSectorY:30},scans,'profile-1'),/return reserve/);
+});

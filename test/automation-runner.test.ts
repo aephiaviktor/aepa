@@ -154,3 +154,12 @@ test('auto-retries plan-stage pauses but never post-submission failures', () => 
   assert.equal(shouldAutoRetryPaused({ ...base, lastError: 'submitted once but confirmation was not observed' }), false);
   assert.equal(shouldAutoRetryPaused(undefined), false);
 });
+
+test('scanning wait activity is not labelled as stop-mining',async()=>{
+  const database=enabledDatabase();
+  database.db.prepare("UPDATE automation_assignment SET assignment='scanning'").run();
+  const runner=new AutomaticCopperRunner(database,async()=>({kind:'waiting',untilUnixSeconds:100n,detail:'Scan cooldown'}));
+  await runner.tick();
+  assert.equal(database.listAutomationActivity()[0].action,'scanning');
+  database.close();
+});

@@ -915,7 +915,7 @@ export interface MiningLoopRequest {
 export async function loadC4Fleets(settings: AppSettings, requestedLoops?: readonly MiningLoopRequest[]): Promise<{
   characterAddress: string;
   fleets: FleetRecord[];
-  copperLoop: CopperLoopPreview;
+  copperLoop: CopperLoopPreview | undefined;
   copperLoops: CopperLoopPreview[];
   chainSlot: string;
 }> {
@@ -925,15 +925,13 @@ export async function loadC4Fleets(settings: AppSettings, requestedLoops?: reado
   try {
     const character = await sage.characters.forProfile(address(settings.playerProfile));
     const fleets = await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' });
-    const requests = requestedLoops?.length
-      ? requestedLoops
-      : [{ fleetName: 'MF-01', scope: DEFAULT_MINING_SCOPE }];
+    const requests = requestedLoops ?? [{ fleetName: 'MF-01', scope: DEFAULT_MINING_SCOPE }];
     const copperLoops = await Promise.all(requests.map(async (request) => {
       const miningFleet = fleets.find((fleet) => request.fleetAddress ? fleet.address === request.fleetAddress : fleet.name === request.fleetName);
       if (!miningFleet) throw new Error(`Fleet ${request.fleetName} was not found`);
       return buildMiningLoopPreview(sage, miningFleet, request.scope);
     }));
-    const copperLoop = copperLoops[0]!;
+    const copperLoop = copperLoops[0];
     const chainSlot = await rpc.getSlot({ commitment: 'confirmed' }).send();
     const updatedAt = new Date().toISOString();
     return {

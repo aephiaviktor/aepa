@@ -1,3 +1,5 @@
+import { executeNextScanningStepOnce, inspectScanningStep, SCANNING_WARP_UNAVAILABLE } from '../src/scanning-c4.js';
+import { scanningPhase } from '../src/scanning-store.js';
 import { shouldEnableSavedAssignment } from '../src/automation-stop.js';
 import { recoverPausedOperation } from '../src/operator-recovery.js';
 import { RawStoreWorker } from '../src/raw-store-worker.js';
@@ -134,7 +136,7 @@ app.whenReady().then(() => {
     database,
     getProfile: () => database.getSettings().playerProfile,
     getIntervalMs: () => Math.max(database.getSettings().refreshIntervalSeconds, 15) * 1_000,
-    load: () => loadC4Fleets(database.getSettings(), database.listAutomationAssignments().map((assignment) => ({
+    load: () => loadC4Fleets(database.getSettings(), database.listAutomationAssignments().filter(assignment => assignment.assignment === 'mining').map((assignment) => ({
       fleetName: assignment.fleetName,
       fleetAddress: assignment.fleetAddress,
       scope: {
@@ -156,7 +158,7 @@ app.whenReady().then(() => {
   automationRunner = new AutomaticCopperRunner(database, async (assignment) => {
     const settings = database.getSettings();
     if (assignment.profile !== settings.playerProfile) throw new Error('Saved Automation profile no longer matches Settings');
-    if (isCrossSystemTravelMode(assignment.travelMode)) throw new Error('Cross-system execution is disabled until C4 fuel, routing, arrival, and return behavior has been validated');
+    if (assignment.assignment === 'mining' && isCrossSystemTravelMode(assignment.travelMode)) throw new Error('Cross-system execution is disabled until C4 fuel, routing, arrival, and return behavior has been validated');
     const scopeFor = (value: typeof assignment): MiningLoopScope => ({
       homeSystemId: value.homeSystemId,
       homeSystemName: value.homeSystemName,
@@ -167,7 +169,7 @@ app.whenReady().then(() => {
       destinationName: value.destinationName,
     });
     let effective = assignment;
-    if (assignment.pendingAssignment) {
+    if (assignment.assignment === 'mining' && assignment.pendingAssignment) {
       const inspection = await inspectNextCopperStep(settings, assignment.targetStopAtUnixSeconds, assignment.fleetName, assignment.fleetAddress, scopeFor(assignment));
       if (inspection.decision.kind === 'start-mining') {
         effective = database.applyPendingAutomationAssignment(assignment.fleetAddress);
@@ -177,6 +179,14 @@ app.whenReady().then(() => {
     const expectedAuthority = await getActiveC4ProfileAuthority(settings);
     return withStoredSigner(signerPath, safeStorage, async (secretKey, publicKey) => {
       if (publicKey !== expectedAuthority) throw new Error('Stored signer no longer matches the active C4 authority');
+      if (effective.assignment === 'scanning') {
+        const outcome = await executeNextScanningStepOnce(settings, secretKey, effective, database);
+        if (outcome.kind === 'stopped' && effective.pendingAssignment && !effective.stopMode) {
+          database.applyPendingAutomationAssignment(effective.fleetAddress);
+          return {kind: 'waiting', untilUnixSeconds: BigInt(Math.floor(Date.now()/1000)), detail: 'Pending assignment activated at serviced Home Starbase'};
+        }
+        return outcome;
+      }
       return executeNextCopperStepOnce(settings, secretKey, effective.targetStopAtUnixSeconds, (stage, details) => {
         if (stage === 'automatic-action-selected' && details?.action === 'start-mining' && details.targetStopAtUnixSeconds) {
           database.setAutomationTargetStop(BigInt(details.targetStopAtUnixSeconds), effective.fleetAddress);
@@ -230,7 +240,7 @@ app.whenReady().then(() => {
         const unchanged = replacement && Object.entries(replacement).every(([key, field]) => JSON.stringify(assignment[key as keyof typeof replacement]) === JSON.stringify(field));
         if (!unchanged) throw new Error(`Fleet ${assignment.fleetName} is stopping and cannot be edited or removed`);
       }
-      for (const candidate of validated.filter((assignment) => isCrossSystemTravelMode(assignment.travelMode))) {
+      for (const candidate of validated.filter((assignment) => assignment.assignment === 'mining' && isCrossSystemTravelMode(assignment.travelMode))) {
         const active = previous.find((assignment) => assignment.fleetAddress === candidate.fleetAddress && assignment.enabled);
         if (active) throw new Error(`Pause ${candidate.fleetName} Automation before replacing its live assignment with cross-system travel`);
       }
@@ -252,10 +262,14 @@ app.whenReady().then(() => {
         if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
         for (const assignment of assignments) {
           if (!shouldEnableSavedAssignment(assignment)) continue;
-          if (isCrossSystemTravelMode(assignment.travelMode)) {
+          if (assignment.assignment === 'mining' && isCrossSystemTravelMode(assignment.travelMode)) {
             const detail = 'Cross-system assignment saved locally; execution remains disabled until C4 fuel, routing, arrival, and return behavior has been validated';
             database.setAutomationBlocked(detail, assignment.fleetAddress);
             database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', detail });
+            continue;
+          }
+          if (assignment.assignment === 'scanning' && assignment.travelMode === 'warp') {
+            database.setAutomationBlocked(SCANNING_WARP_UNAVAILABLE, assignment.fleetAddress);
             continue;
           }
           assertAutomationCanEnable(assignment);
@@ -282,7 +296,7 @@ app.whenReady().then(() => {
     if (typeof fleetAddress !== 'string' || fleetAddress.length < 1 || fleetAddress.length > 64) throw new Error('Invalid Fleet address');
     if (mode !== 'now' && mode !== 'end-of-cycle') throw new Error('Invalid Automation stop mode');
     const assignment = database.requestAutomationStop(mode, fleetAddress);
-    const timing = mode === 'now' ? 'immediately' : 'at the end of the current mining cycle';
+    const timing = mode === 'now' ? 'immediately' : 'at the end of the current cycle';
     database.recordAutomationActivity({
       fleetAddress: assignment.fleetAddress,
       fleetName: assignment.fleetName,
@@ -299,6 +313,7 @@ app.whenReady().then(() => {
     if (!assignment) throw new Error('Save the supported Automation assignment first');
     if (enabled) {
       assertAutomationCanEnable(assignment);
+      if (assignment.assignment === 'scanning' && assignment.travelMode !== 'subwarp') throw new Error(SCANNING_WARP_UNAVAILABLE);
       const signer = await getAuthorizedSignerStatus(signerPath);
       if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
       if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
@@ -327,6 +342,11 @@ app.whenReady().then(() => {
       let nextStep = '';
       await recoverPausedOperation(operation.evidence, {
         inspect: async () => {
+          if (assignment.assignment === 'scanning') {
+            const decision = await inspectScanningStep(settings,assignment,scanningPhase(database.db,assignment.profile,fleetAddress));
+            if (decision.kind === 'blocked') throw new Error(decision.reason);
+            nextStep = decision.kind;
+          } else {
           const observed = await inspectNextCopperStep(settings, assignment.targetStopAtUnixSeconds, assignment.fleetName, fleetAddress, {
             homeSystemId:assignment.homeSystemId, homeSystemName:assignment.homeSystemName,
             resourceId:assignment.resourceId, resourceIds:assignment.resourceIds, resourceName:assignment.resourceName,
@@ -334,6 +354,7 @@ app.whenReady().then(() => {
           });
           if (observed.decision.kind === 'blocked') throw new Error(observed.decision.reason);
           nextStep = observed.decision.kind;
+          }
           const current = database.getSettings();
           const latest = database.listAutomationAssignments().find(row => row.fleetAddress === fleetAddress);
           if (current.network !== settings.network || current.playerProfile !== settings.playerProfile ||

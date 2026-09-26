@@ -1,3 +1,4 @@
+import { scanCargoCosts, scanSectorRegion } from '../dist/src/scanning-model.js';
 import { formatHomeStarbaseOption, isRoundTripReachable, rankMiningDestinations } from '../dist/src/automation-options.js';
 import { automationDraftsEqual, formatMiningProgress } from '../dist/src/automation-ui.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
@@ -255,8 +256,8 @@ function savedDrafts() {
   const assignments = automationRuntime?.assignments ?? (automationRuntime?.assignment ? [automationRuntime.assignment] : []);
   return assignments.map((record) => {
     const value = record.pendingAssignment || record;
-    const { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode } = value;
-    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds: resourceIds ?? [resourceId], destinationAddress, travelMode };
+    const { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY } = value;
+    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds: resourceIds ?? [resourceId], destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY };
   });
 }
 
@@ -351,6 +352,9 @@ function readAutomationRow(row) {
     resourceIds: [...row.querySelectorAll('[data-resource-id]:checked')].map(input => Number(input.dataset.resourceId)).sort((a, b) => a - b),
     destinationAddress: row.querySelector('[data-field="destination"]').value,
     travelMode: row.querySelector('[data-field="travel"]').value,
+    scanPatternId: row.querySelector('[data-field="scan-pattern"]').value === '' ? undefined : Number(row.querySelector('[data-field="scan-pattern"]').value),
+    scanSectorX: row.querySelector('[data-field="scan-x"]').valueAsNumber,
+    scanSectorY: row.querySelector('[data-field="scan-y"]').valueAsNumber,
   };
 }
 
@@ -360,7 +364,7 @@ function availableFleetOptions(row, preferredValue) {
     .map((candidate) => candidate.querySelector('[data-field="fleet"]').value));
   return automationCatalog.fleets
     .filter((fleet) => fleet.address === preferredValue || !used.has(fleet.address))
-    .map((fleet) => ({ value: fleet.address, label: `${fleet.name} | ${fleet.state}` }));
+    .map((fleet) => ({ value: fleet.address, label: fleet.name }));
 }
 
 function renderResourcePicker(row, destination, selectedIds = []) {
@@ -413,6 +417,30 @@ function updateResourceCounter(row) {
 
 function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   const draft = readAutomationRow(row);
+  const scanning = draft.assignment === 'scanning';
+  row.classList.toggle('scanning',scanning);
+  const headings = scanning ? ['Fleet','Assignment','Home Starbase','Scan Sector X','Scan Sector Y','Scan Pattern','Travel Mode','Actions'] : ['Fleet','Assignment','Home Starbase','Travel','Mining Destination','Resources','Actions'];
+  row.querySelector('.row-assignment-columns').replaceChildren(...headings.map(title => { const span=document.createElement('span');span.textContent=title;return span; }));
+  row.querySelector('[data-field="destination"]').hidden = scanning;
+  row.querySelector('.resource-picker').hidden = scanning;
+  for (const field of row.querySelectorAll('.scanning-field')) field.hidden = !scanning;
+  const mode = row.querySelector('[data-field="travel"]');
+  if (scanning) {
+    const grid = row.querySelector('.field-grid');
+    const actions = row.querySelector('.row-actions');
+    for (const field of ['scan-x','scan-y','scan-pattern','travel']) {
+      const element = row.querySelector(`[data-field="${field}"]`);
+      grid.insertBefore(element.tagName === 'INPUT' ? element.parentElement : element,actions);
+    }
+    grid.append(row.querySelector('.scan-costs'));
+    replaceSelectOptions(mode, [{value:'subwarp',label:'Subwarp'}, {value:'warp',label:'Warp — unavailable',disabled:true,title:'AtlasKit does not support Warp arrival settlement.'}], preferredTravelMode === 'warp' ? 'warp' : 'subwarp');
+    refreshScanningRow(row, draft);
+    writeAutomationDrafts();
+    updateAssignmentControls();
+    return;
+  }
+  row.querySelector('.field-grid').insertBefore(mode,row.querySelector('[data-field="destination"]'));
+  replaceSelectOptions(mode, [{value:'auto',label:'Same system'}, {value:'subwarp',label:'Subwarp'}, {value:'warp',label:'Warp'}, {value:'warp-lane',label:'Warp lane'}], preferredTravelMode ?? draft.travelMode);
   const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === draft.homeSystemAddress);
   const travel = row.querySelector('[data-field="travel"]');
   if (preferredTravelMode && [...travel.options].some((option) => option.value === preferredTravelMode)) travel.value = preferredTravelMode;
@@ -435,16 +463,35 @@ function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   updateAssignmentControls();
 }
 
+function refreshScanningRow(row, draft) {
+  const select = row.querySelector('[data-field="scan-pattern"]');
+  const patterns = automationCatalog.scanPatterns ?? [];
+  const region = scanSectorRegion(automationCatalog.scanRegions ?? [],draft.scanSectorX,draft.scanSectorY);
+  replaceSelectOptions(select, patterns.map(pattern => ({value:pattern.id, label:pattern.name,
+    disabled:!pattern.available || (!!region && !region.available), title:pattern.requirement ?? region?.requirement})), row.initialPatternId ?? draft.scanPatternId);
+  delete row.initialPatternId;
+  const pattern = patterns.find(value => String(value.id) === select.value);
+  const fleet = automationCatalog.fleets.find(value => value.address === draft.fleetAddress);
+  const label = row.querySelector('.scan-costs');
+  if (!pattern || fleet?.scanCost === undefined) { label.textContent = 'Refresh the catalog to load Scan Patterns and Fleet costs.'; return; }
+  const costs = scanCargoCosts(fleet.scanCost, pattern.costs.map(cost => ({cargo:{id:cost.cargoId,name:cost.name},multiplier:{raw:BigInt(cost.multiplierRaw)}})));
+  label.textContent = `${costs.map(cost => `${cost.name}: ${cost.amount} / scan`).join(' · ') || 'No cargo cost'}${pattern.requirement ? ` · ${pattern.requirement}` : ''}${!region?.available ? ` · ${region?.requirement ?? 'Select a Scan Sector in an available region.'}` : ''}`;
+}
+
 function createAutomationRow(draft = {}) {
   const row = document.createElement('div');
   row.className = 'automation-fleet-row';
-  row.innerHTML = `<div class="field-grid compact-field-grid">
+  row.innerHTML = `<div class="assignment-columns compact-field-grid row-assignment-columns" aria-hidden="true" hidden></div><div class="field-grid compact-field-grid">
     <select data-field="fleet" aria-label="Fleet"></select>
-    <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option></select>
+    <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option><option value="scanning">Scanning</option></select>
     <select data-field="home" aria-label="Home Starbase"></select>
     <select data-field="travel" aria-label="Travel"><option value="auto">Same system</option><option value="subwarp">Subwarp</option><option value="warp">Warp</option><option value="warp-lane">Warp lane</option></select>
     <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
     <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources · 0/8</summary><div class="resource-options"></div></details>
+    <select class="scanning-field" data-field="scan-pattern" aria-label="Scan Pattern" hidden></select>
+    <label class="scanning-field" hidden><input data-field="scan-x" aria-label="Scan Sector X" type="number" min="-128" max="127" step="1" required></label>
+    <label class="scanning-field" hidden><input data-field="scan-y" aria-label="Scan Sector Y" type="number" min="-128" max="127" step="1" required></label>
+    <small class="scanning-field scan-costs" role="status" hidden></small>
     <div class="row-actions"><button class="stop-fleet secondary" type="button">Stop</button><button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button></div>
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
@@ -455,6 +502,12 @@ function createAutomationRow(draft = {}) {
     : [], draft.homeSystemAddress);
   row.initialResourceIds = draft.resourceIds ?? (draft.resourceId == null ? [] : [draft.resourceId]);
   row.querySelector('[data-field="assignment"]').value = draft.assignment || 'mining';
+  row.querySelector('[data-field="scan-x"]').value = draft.scanSectorX ?? '';
+  row.querySelector('[data-field="scan-y"]').value = draft.scanSectorY ?? '';
+  row.initialPatternId = draft.scanPatternId;
+  for (const input of row.querySelectorAll('input[type="number"]')) input.addEventListener('input', () => {
+    refreshScanningRow(row, readAutomationRow(row)); writeAutomationDrafts(); updateAssignmentControls();
+  });
   for (const select of row.querySelectorAll('select')) select.addEventListener('change', () => {
     if (select.dataset.field === 'fleet') renderAutomationRows(writeAutomationDrafts());
     else refreshAutomationRow(row, row.querySelector('[data-field="destination"]').value, row.querySelector('[data-field="travel"]').value);
@@ -468,7 +521,7 @@ function createAutomationRow(draft = {}) {
     if (!persisted?.enabled || persisted.status !== 'running' || persisted.stopMode) return;
     pendingStopFleet = { address: persisted.fleetAddress, name: persisted.fleetName };
     $('stop-title').textContent = `Stop ${persisted.fleetName} Automation?`;
-    $('stop-message').textContent = 'Choose when mining should stop. AEPA will then return the fleet home, unload, refill, and disable its assignment.';
+    $('stop-message').textContent = 'Choose when this assignment should stop. AEPA will then return the fleet home, unload, refill, and disable its assignment.';
     $('stop-unsaved-warning').hidden = !hasUnsavedAutomationChanges();
     $('stop-dialog').showModal();
   };
@@ -591,7 +644,18 @@ function updateAssignmentControls() {
   const assignments = automationRuntime?.assignments ?? [];
   const rows = [...document.querySelectorAll('.automation-fleet-row')];
   const drafts = rows.map(readAutomationRow);
+  const hasScanning = drafts.some(draft => draft.assignment === 'scanning');
+  document.querySelector('#automation-config > .assignment-columns').hidden = hasScanning;
+  for (const row of rows) row.querySelector('.row-assignment-columns').hidden = !hasScanning;
   const canSave = rows.length > 0 && rows.every((row) => {
+    if (row.querySelector('[data-field="assignment"]').value === 'scanning') {
+      const draft = readAutomationRow(row);
+      const pattern = automationCatalog?.scanPatterns?.find(value => value.id === draft.scanPatternId);
+      return pattern?.available && scanSectorRegion(automationCatalog.scanRegions ?? [],draft.scanSectorX,draft.scanSectorY)?.available && draft.travelMode === 'subwarp' && ['scan-x','scan-y'].every(field => {
+        const input = row.querySelector(`[data-field="${field}"]`);
+        return input.value !== '' && input.checkValidity();
+      });
+    }
     const checked = [...row.querySelectorAll('[data-resource-id]:checked')];
     return row.querySelector('[data-field="destination"]').value && checked.length > 0 && checked.every(input => input.dataset.available !== 'false');
   });

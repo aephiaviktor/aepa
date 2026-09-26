@@ -35,3 +35,10 @@ test('mining progress clamps each resource at its expected cycle total', () => {
     expectedResources: [{ name: 'Hydrogen', expectedRaw: 117n }],
   }, 1_200n), 'Mining progress\nHydrogen: 117 / 117');
 });
+
+test('scan sector and pattern edits are dirty but hidden mining fields are irrelevant',()=>{
+  const draft={fleetAddress:'fleet',assignment:'scanning',homeSystemAddress:'home',destinationAddress:'',resourceIds:[],travelMode:'subwarp',scanPatternId:0,scanSectorX:-1,scanSectorY:2};
+  assert.equal(automationDraftsEqual([draft],[{...draft,scanSectorX:-2}]),false);
+  assert.equal(automationDraftsEqual([draft],[{...draft,scanPatternId:2}]),false);
+  assert.equal(automationDraftsEqual([draft],[{...draft,resourceIds:[311],destinationAddress:'hidden-belt'}]),true);
+});
