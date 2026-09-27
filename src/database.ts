@@ -559,7 +559,7 @@ export class AepaDatabase {
       .run(action, new Date().toISOString(), selected);
   }
 
-  confirmAutomationAction(value: { fleetAddress?: string; fleetName?: string; action: string; signature: string; detail: string; targetStopAtUnixSeconds?: bigint }): void {
+  confirmAutomationAction(value: { fleetAddress?: string; fleetName?: string; action: string; signature: string; detail: string; targetStopAtUnixSeconds?: bigint; completeStop?: { mode: AutomationStopMode; requestedAt?: string; updatedAt: string } }): boolean {
     const selected = value.fleetAddress ?? this.getAutomationAssignment()?.fleetAddress;
     if (!selected) throw new Error('No Automation assignment exists to confirm');
     const assignment = this.getAutomationAssignment(selected)!;
@@ -570,7 +570,19 @@ export class AepaDatabase {
       if (targetStop === undefined) this.db.prepare(`UPDATE automation_assignment SET last_action = ?, updated_at = ? WHERE fleet_address = ?`).run(value.action, new Date().toISOString(), selected);
       else this.db.prepare(`UPDATE automation_assignment SET target_stop_at_unix_seconds = ?, last_action = ?, updated_at = ? WHERE fleet_address = ?`).run(targetStop, value.action, new Date().toISOString(), selected);
       this.recordAutomationActivity({ fleetAddress: selected, fleetName: value.fleetName ?? assignment.fleetName, kind: 'confirmed', action: value.action, signature: value.signature, detail: value.detail });
+      // Only the stop request inspected by this action may consume its confirmed
+      // service evidence. Persist confirmation and shutdown in one transaction.
+      const stopped = !!value.completeStop && assignment.enabled && assignment.status === 'running'
+        && assignment.stopMode === value.completeStop.mode
+        && assignment.stopRequestedAt === value.completeStop.requestedAt
+        && assignment.updatedAt === value.completeStop.updatedAt;
+      if (stopped) {
+        this.completeAutomationStop(selected);
+        this.recordAutomationActivity({ fleetAddress: selected, fleetName: value.fleetName ?? assignment.fleetName,
+          kind: 'disabled', action: 'stop-automation', detail: `Fleet is docked, unloaded, and refilled; Automation is disabled. ${value.detail}` });
+      }
       this.db.exec('COMMIT');
+      return stopped;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;

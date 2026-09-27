@@ -36,6 +36,8 @@ export type AutomaticStepOutcome = {
   action: string;
   signature: string;
   detail: string;
+  resultingFleetState?: string;
+  resultingNextStep?: string;
   targetStopAtUnixSeconds?: bigint;
 };
 
@@ -87,14 +89,18 @@ export class AutomaticCopperRunner {
       if (outcome.action === 'start-mining' && outcome.targetStopAtUnixSeconds === undefined) {
         throw new Error('Confirmed start-mining did not produce a durable target stop time');
       }
-      this.database.confirmAutomationAction({
+      const stopped = this.database.confirmAutomationAction({
         fleetAddress: assignment.fleetAddress,
         fleetName: assignment.fleetName,
         action: outcome.action,
         signature: outcome.signature,
         detail: outcome.detail,
+        ...(assignment.stopMode && outcome.resultingFleetState === 'docked' && outcome.resultingNextStep === 'undock'
+          ? { completeStop: { mode: assignment.stopMode, requestedAt: assignment.stopRequestedAt, updatedAt: assignment.updatedAt } }
+          : {}),
         ...(outcome.targetStopAtUnixSeconds === undefined ? {} : { targetStopAtUnixSeconds: outcome.targetStopAtUnixSeconds }),
       });
+      if (stopped) return { kind: 'disabled' };
       return { kind: 'confirmed', action: outcome.action, signature: outcome.signature };
     } catch (error) {
       const detail = String((error as Error)?.message ?? error);

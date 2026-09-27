@@ -71,6 +71,89 @@ test('completes a durable stop request only after the fleet is serviced and dock
   database.close();
 });
 
+for (const mode of ['now', 'end-of-cycle'] as const) {
+  test(`completes ${mode} in the confirmed service tick before external movement`, async () => {
+    const database = enabledDatabase();
+    database.requestAutomationStop(mode, 'fleet-mf01');
+    const stoppingAssignment = database.getAutomationAssignment()!;
+    database.saveAutomationAssignments([stoppingAssignment, { ...stoppingAssignment, fleetAddress: 'other-fleet', fleetName: 'MF-02' }]);
+    database.setAutomationEnabled(true, 'other-fleet');
+    let calls = 0;
+    let externallyMoved = false;
+    const runner = new AutomaticCopperRunner(database, async (assignment) => {
+      if (assignment.fleetAddress === 'other-fleet') return { kind: 'waiting', untilUnixSeconds: 3_000n, detail: 'Other fleet mining' };
+      calls += 1;
+      if (externallyMoved) throw new Error('External automation already moved this fleet');
+      return { kind: 'confirmed', action: 'load', signature: 'sig-service', detail: 'Service confirmed',
+        resultingFleetState: 'docked', resultingNextStep: 'undock' };
+    });
+    assert.deepEqual(await runner.tick(), { kind: 'disabled' });
+    externallyMoved = true;
+    assert.equal(database.getAutomationAssignment('fleet-mf01')?.enabled, false);
+    assert.equal(database.getAutomationAssignment('fleet-mf01')?.stopMode, undefined);
+    assert.equal(database.getAutomationAssignment('fleet-mf01')?.lastAction, 'stopped');
+    assert.equal(database.listAutomationActivity().filter(row => row.signature === 'sig-service').length, 1);
+    assert.equal(database.listAutomationActivity().filter(row => row.kind === 'disabled').length, 1);
+    assert.equal(database.getAutomationAssignment('other-fleet')?.enabled, true);
+    assert.equal((await runner.tick()).kind, 'waiting');
+    assert.equal(calls, 1);
+    database.close();
+  });
+}
+
+for (const evidence of [
+  {},
+  { resultingFleetState: 'docked', resultingNextStep: 'load' },
+  { resultingFleetState: 'idle', resultingNextStep: 'undock' },
+]) {
+  test(`does not complete a stop without confirmed service evidence ${JSON.stringify(evidence)}`, async () => {
+    const database = enabledDatabase();
+    database.requestAutomationStop('now', 'fleet-mf01');
+    const runner = new AutomaticCopperRunner(database, async () => ({
+      kind: 'confirmed', action: 'unload', signature: 'sig-partial', detail: 'Partial service', ...evidence,
+    }));
+    assert.equal((await runner.tick()).kind, 'confirmed');
+    assert.equal(database.getAutomationAssignment()?.stopMode, 'now');
+    assert.equal(database.getAutomationAssignment()?.enabled, true);
+    database.close();
+  });
+}
+
+test('does not consume a changed stop request with stale confirmed evidence', async () => {
+  const database = enabledDatabase();
+  database.requestAutomationStop('now', 'fleet-mf01');
+  const runner = new AutomaticCopperRunner(database, async () => {
+    database.requestAutomationStop('end-of-cycle', 'fleet-mf01');
+    return { kind: 'confirmed', action: 'load', signature: 'sig-stale', detail: 'Service confirmed',
+      resultingFleetState: 'docked', resultingNextStep: 'undock' };
+  });
+  assert.equal((await runner.tick()).kind, 'confirmed');
+  assert.equal(database.getAutomationAssignment()?.stopMode, 'end-of-cycle');
+  assert.equal(database.getAutomationAssignment()?.enabled, true);
+  assert.equal(database.listAutomationActivity()[0].signature, 'sig-stale');
+  database.close();
+});
+
+test('rolls back both confirmation and stop completion if disabled activity cannot be recorded', async () => {
+  const database = enabledDatabase();
+  database.requestAutomationStop('now', 'fleet-mf01');
+  database.db.exec(`CREATE TRIGGER reject_disabled BEFORE INSERT ON automation_activity
+    WHEN NEW.kind = 'disabled' BEGIN SELECT RAISE(ABORT, 'disabled activity failed'); END`);
+  let calls = 0;
+  const runner = new AutomaticCopperRunner(database, async () => {
+    calls += 1;
+    return { kind: 'confirmed', action: 'load', signature: 'sig-rollback', detail: 'Service confirmed',
+      resultingFleetState: 'docked', resultingNextStep: 'undock' };
+  });
+  assert.equal((await runner.tick()).kind, 'paused');
+  assert.equal(database.getAutomationAssignment()?.stopMode, 'now');
+  assert.notEqual(database.getAutomationAssignment()?.lastAction, 'stopped');
+  assert.equal(database.listAutomationActivity().some(row => row.signature === 'sig-rollback'), false);
+  assert.equal((await runner.tick()).kind, 'idle');
+  assert.equal(calls, 1);
+  database.close();
+});
+
 test('exposes a fast-follow delay after a confirmed action instead of the full refresh interval', () => {
   // SLYA-style snappiness: as soon as one action confirms, the next runner tick
   // should follow within a couple of seconds, not after the 60s (or 15s floor)

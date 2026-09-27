@@ -49,6 +49,8 @@ export type AutomaticCopperStepResult = {
   action: AuthorizedLiveAction;
   signature: string;
   detail: string;
+  resultingFleetState: string;
+  resultingNextStep: string;
   targetStopAtUnixSeconds?: bigint;
 };
 
@@ -109,6 +111,8 @@ export async function executeNextCopperStepOnce(
     kind: 'confirmed',
     action,
     signature: result.transactionSignature,
+    resultingFleetState: result.resultingFleetState,
+    resultingNextStep: result.resultingNextStep,
     detail: `${result.summary}; ${result.confirmationStatus} at slot ${result.confirmationSlot}; resulting state ${result.resultingFleetState}`,
     ...(targetStop === undefined ? {} : { targetStopAtUnixSeconds: targetStop }),
   };
