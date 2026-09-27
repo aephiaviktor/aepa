@@ -1,8 +1,11 @@
+import type { AutomationStopMode } from './automation-stop.js';
+
 export interface CargoAmount { cargoId: number; amount: bigint }
 interface Point { x: number; y: number }
 /** Bound supply storage to half the hold and twenty detections. Leave the rest
  * for recovery. Exact per-row rounding matches SDK cargo capacity units. */
-export function scanningServiceTargets(costs: readonly (CargoAmount & { storageCost: number; name: string })[], capacity: bigint): CargoAmount[] {
+export function scanningServiceTargets(costs: readonly (CargoAmount & { storageCost: number; name: string })[], capacity: bigint, stop?: AutomationStopMode): CargoAmount[] {
+  if (stop) return [];
   if (capacity <= 0n) throw new Error('Scanning requires cargo capacity');
   for (let scans = 20n; scans >= 1n; scans--) {
     const storage = costs.reduce((sum, row) => sum + (row.amount * scans * BigInt(row.storageCost) + 255n) / 256n, 0n);

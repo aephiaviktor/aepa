@@ -34,6 +34,14 @@ test('safe stop never starts another detection and movement must settle before r
   assert.equal(decideScanningStep({ ...base, stop: 'now', fleetState: 'docked', atHome: true }).kind, 'stopped');
   assert.equal(decideScanningStep({ ...base, fleetState: 'subwarp', arrivesAt: 100n, signal: 'contact' }).kind, 'settle-arrival');
 });
+test('both stop modes unload scan supplies, refill fuel, then stop', () => {
+  for (const stop of ['now', 'end-of-cycle'] as const) {
+    const docked = { ...base, stop, fleetState: 'docked', atHome: true };
+    assert.equal(decideScanningStep({ ...docked, serviceUnload: true, serviceLoad: true }).kind, 'unload');
+    assert.equal(decideScanningStep({ ...docked, serviceLoad: true }).kind, 'load');
+    assert.equal(decideScanningStep(docked).kind, 'stopped');
+  }
+});
 
 test('a stored Warp journey never masquerades as Idle or silently falls back to Subwarp',()=>{
   assert.equal(decideScanningStep({...base,fleetState:'warp',arrivesAt:99n}).kind,'blocked');

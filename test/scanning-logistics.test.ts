@@ -5,6 +5,11 @@ test('scan supplies use half the hold at most, leaving recovery capacity', () =>
   assert.deepEqual(scanningServiceTargets([{ cargoId: 5, name: 'Data', amount: 3n, storageCost: 256 }], 100n), [{ cargoId: 5, amount: 48n }]);
   assert.throws(() => scanningServiceTargets([{ cargoId: 5, name: 'Data', amount: 51n, storageCost: 256 }], 100n), /capacity/);
 });
+test('both stop modes suppress scan-supply targets', () => {
+  const costs = [{ cargoId: 5, name: 'Repair Kit', amount: 10n, storageCost: 256 }];
+  assert.deepEqual(scanningServiceTargets(costs, 1_000n, 'now'), []);
+  assert.deepEqual(scanningServiceTargets(costs, 1_000n, 'end-of-cycle'), []);
+});
 test('service unloads excess and unrelated loot without confusing tank fuel with scan fuel in hold', () => {
   const result = scanningTransfers([{ id: 2, amount: 7n }, {id: 50, amount: 12n}], [{cargoId: 2, amount: 10n}]);
   assert.deepEqual(result.unload, [{cargoId: 50, amount: 12n}]);

@@ -68,7 +68,7 @@ async function observeScanning(client: Client, rpc: Rpc, settings: AppSettings, 
   const costs = scanCargoCosts(fleet.stats.misc.scanCost, (pattern?.costs ?? [])).map(row => ({...row, storageCost: pattern!.costs.find(cost => cost.cargo.id === row.cargoId)!.cargo.storageCost}));
   let targets: ReturnType<typeof scanningServiceTargets> = [];
   if (!assignment.pendingAssignment && eligibility) {
-    try { targets = scanningServiceTargets(costs, fleet.capacities.cargo.total); }
+    try { targets = scanningServiceTargets(costs, fleet.capacities.cargo.total, assignment.stopMode); }
     catch(error) { eligibility = false; unavailableReason = String((error as Error).message); }
   }
   const transfers = scanningTransfers(fleet.cargoHold.items, targets);
