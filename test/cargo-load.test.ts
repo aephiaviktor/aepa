@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { assertCopperLoadFitsCargoStorage, calculateCopperLoadStorageRaw } from '../src/c4.js';
 import { PLAN_STAGE_MARKER, isPostSubmissionFailure, planStageReason } from '../src/automatic-c4.js';
@@ -33,4 +34,14 @@ test('plan-stage classification marks pre-submission failures and never post-sub
   assert.equal(isPostSubmissionFailure('it must not be resubmitted'), true);
   assert.equal(isPostSubmissionFailure('cargo storage capacity has 249 units remaining'), false);
   assert.match(planStageReason('planning failed'), /\[plan-stage\] planning failed/);
+});
+
+test('automatic mining reads its configured Fleet and Asteroid directly', async () => {
+  const source = await readFile(new URL('../src/c4.ts', import.meta.url), 'utf8')
+    .catch(() => readFile(new URL('../../src/c4.ts', import.meta.url), 'utf8'));
+  const observation = source.match(/async function observeMiningLoop[\s\S]*?\n}\n\nfunction stringifyServiceAmounts/)?.[0] ?? '';
+  assert.match(observation, /fleetAddress \? sage\.fleets\.get\(address\(fleetAddress\),/);
+  assert.match(observation, /sage\.celestialBodies\.get\(address\(scope\.destinationAddress\),/);
+  assert.doesNotMatch(observation, /home\.asteroids\.all/);
+  assert.match(observation, /buildMiningLoopPreview\(sage, fleet, scope, \{ home, asteroid \}\)/);
 });

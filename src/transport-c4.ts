@@ -26,6 +26,7 @@ import {
   adaptWarpLaneCurrencyCachePlan,
   assertFreshWarpLaneCurrencyCache,
 } from "./transport-plan.js";
+import { ActionStageTimer, formatActionTimings } from "./action-timing.js";
 
 const READ = { commitment: "confirmed", policy: "no-store" } as const;
 const CLOCK = address("SysvarC1ock11111111111111111111111111111111");
@@ -112,19 +113,15 @@ async function observe(
   if (assignment.assignment !== "transport")
     throw new Error("Expected a Transport assignment");
   const profileAddress = address(settings.playerProfile);
-  const [fleet, profile, character, home, systems, now] = await Promise.all([
+  const [fleet, profile, character, home, target, now] = await Promise.all([
     client.fleets.get(address(assignment.fleetAddress), READ),
     client.profiles.get(profileAddress, READ),
     client.characters.forProfile(profileAddress, READ),
     client.systems.byId(assignment.homeSystemId, READ),
-    client.systems.all(READ),
+    client.systems.get(address(assignment.destinationAddress), READ),
     chainClock(rpc),
   ]);
-  const target = systems.find(
-    (system) => String(system.address) === assignment.destinationAddress,
-  );
   if (
-    !target ||
     fleet.name !== assignment.fleetName ||
     fleet.ownerProfile.address !== profileAddress ||
     String(home.address) !== assignment.homeSystemAddress
@@ -628,6 +625,7 @@ export async function executeNextTransportStepOnce(
   assignment: AutomationAssignmentRecord,
   database: AepaDatabase,
 ): Promise<AutomaticStepOutcome> {
+  const timer = new ActionStageTimer();
   const rpc = createSolanaRpc(settings.rpcUrl);
   const client = createSageClient({ cluster: "zink-ptr", rpc, writeRpc: rpc });
   try {
@@ -638,6 +636,7 @@ export async function executeNextTransportStepOnce(
     let phase = runtime.phase;
     for (let transitions = 0; transitions < 20; transitions++) {
       const observed = await observe(client, rpc, settings, assignment);
+      timer.complete("observation");
       const decision = phaseAction(observed, assignment, phase);
       if (runtime.attemptAction) {
         if (!expectedObserved(observed, runtime.expected as ExpectedPostState))
@@ -689,6 +688,7 @@ export async function executeNextTransportStepOnce(
         currencyCache = await adaptWarpLaneCurrencyCachePlan(plan, game);
         plan = currencyCache.plan;
       }
+      timer.complete("planning");
       const expected = expectedPost(observed, assignment, action);
       const result = await executeGuardedPlan({
         settings,
@@ -710,6 +710,7 @@ export async function executeNextTransportStepOnce(
         ),
         observeConfirmed: () =>
           postcondition(client, observed, assignment, action),
+        timer,
       });
       const nextPhase =
         phase === "stop-unload-outbound-cargo"
@@ -727,7 +728,8 @@ export async function executeNextTransportStepOnce(
         kind: "confirmed",
         action,
         signature: result.signature,
-        detail: `${plan.summary}; confirmed at slot ${result.slot}`,
+        detail: `${plan.summary}; confirmed at slot ${result.slot}; ${formatActionTimings(result.timings)}`,
+        continueImmediately: true,
       };
     }
     throw new Error(

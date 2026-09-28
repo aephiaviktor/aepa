@@ -17,12 +17,32 @@ import { decideScanningStep, type ScanningAction } from './scanning-loop.js';
 import { scanningServiceTargets, scanningTransfers, travelFuelBudget } from './scanning-logistics.js';
 import { scanningPhase, setScanningPhase, captureScanReceipt } from './scanning-store.js';
 import { executeGuardedPlan } from './guarded-plan.js';
+import { TtlPromiseCache } from './ttl-cache.js';
+import { ActionStageTimer, formatActionTimings } from './action-timing.js';
 
 const READ = {commitment: 'confirmed', policy: 'no-store'} as const;
 const CLOCK = address('SysvarC1ock11111111111111111111111111111111');
+const SCANNING_CATALOG_TTL_MS = 5 * 60_000;
 export const SCANNING_WARP_UNAVAILABLE = 'Warp scanning is unavailable: AtlasKit does not support Warp arrival settlement. Select Subwarp.';
 type Client = ReturnType<typeof createSageClient>;
 type Rpc = ReturnType<typeof createSolanaRpc>;
+type Pattern = Awaited<ReturnType<typeof maybeGetScanPattern>>;
+type Policy = Awaited<ReturnType<typeof maybeGetScanPatternPolicy>>;
+const patternCache = new TtlPromiseCache<string, readonly [Pattern, Policy]>(SCANNING_CATALOG_TTL_MS);
+const regionCache = new TtlPromiseCache<string, Awaited<ReturnType<typeof loadScanningRegions>>>(SCANNING_CATALOG_TTL_MS);
+
+function scanningPatternConfig(client: Client, rpcUrl: string, patternId: number) {
+  return patternCache.get(`${rpcUrl}|${patternId}`, () => Promise.all([
+    maybeGetScanPattern(client.context, patternId, READ),
+    maybeGetScanPatternPolicy(client.context, patternId, READ),
+  ]));
+}
+
+function scanningRegions(client: Client, rpc: Rpc, settings: AppSettings, unlocked: readonly number[]) {
+  const tags = [...unlocked].sort((left, right) => left - right);
+  const key = `${settings.rpcUrl}|${settings.playerProfile}|${tags.join(',')}`;
+  return regionCache.get(key, () => loadScanningRegions(client.context, rpc, tags));
+}
 
 async function scanClock(rpc: Rpc) {
   const result = await rpc.getAccountInfo(CLOCK, {commitment: 'confirmed', encoding: 'base64'}).send();
@@ -50,18 +70,18 @@ async function observeScanning(client: Client, rpc: Rpc, settings: AppSettings, 
   const sector = validateScanSector(assignment.scanSectorX, assignment.scanSectorY);
   if (!Number.isInteger(assignment.scanPatternId)) throw new Error('Missing saved Scan Pattern');
   const profileAddress = address(settings.playerProfile);
-  const [fleet, profile, character, home, signal, clock, pattern, policy] = await Promise.all([
+  const [fleet, profile, character, home, signal, clock, patternConfig] = await Promise.all([
     client.fleets.get(address(assignment.fleetAddress), READ), client.profiles.get(profileAddress, READ),
     client.characters.forProfile(profileAddress, READ), client.systems.byId(assignment.homeSystemId, READ),
     maybeGetScanSignalForFleet(client.context, address(assignment.fleetAddress), READ), scanClock(rpc),
-    maybeGetScanPattern(client.context, assignment.scanPatternId!, READ),
-    maybeGetScanPatternPolicy(client.context, assignment.scanPatternId!, READ),
+    scanningPatternConfig(client, settings.rpcUrl, assignment.scanPatternId!),
   ]);
+  const [pattern, policy] = patternConfig;
   if (fleet.name !== assignment.fleetName || fleet.ownerProfile.address !== profileAddress || String(home.address) !== assignment.homeSystemAddress) throw new Error('Scanning Fleet/Profile/Home identity mismatch');
   const keyIndex = profile.keys.findIndex(key => key.expiresAt === undefined || key.expiresAt > clock.unixSeconds);
   if (keyIndex < 0) throw new Error('No active Profile authority');
   const authorization = {profile: profileAddress, authority: profile.keys[keyIndex]!.address, keyIndex};
-  const region = scanSectorRegion(await loadScanningRegions(client.context,rpc,character.modifiers.values.researchTags),sector.x,sector.y);
+  const region = scanSectorRegion(await scanningRegions(client,rpc,settings,character.modifiers.values.researchTags),sector.x,sector.y);
   const patternOption = pattern ? scanningPatternOption(pattern,policy,character.modifiers.values.researchTags) : undefined;
   let eligibility = !!patternOption?.available && !!region?.available;
   let unavailableReason = patternOption?.requirement ?? region?.requirement ?? 'Scan pattern or sector is not available';
@@ -177,18 +197,23 @@ export async function inspectScanningStep(settings: AppSettings, assignment: Aut
 
 export async function executeNextScanningStepOnce(settings: AppSettings, secretKey: Uint8Array, assignment: AutomationAssignmentRecord, database: AepaDatabase): Promise<AutomaticStepOutcome> {
   if (assignment.travelMode !== 'subwarp') throw new Error(SCANNING_WARP_UNAVAILABLE);
+  const timer = new ActionStageTimer();
   const rpc = createSolanaRpc(settings.rpcUrl);
   const client = createSageClient({cluster:'zink-ptr', rpc, writeRpc:rpc});
   try {
     let phase = scanningPhase(database.db, assignment.profile, assignment.fleetAddress);
     const initialPhase = phase;
     let observed = await observeScanning(client,rpc,settings,assignment,phase);
+    timer.complete('observation');
     const persist = (value: typeof phase) => { setScanningPhase(database.db,assignment.profile,assignment.fleetAddress,value); phase = value; };
     if (phase === 'scanning' && (!observed.suppliesReady || assignment.stopMode || assignment.pendingAssignment)) persist('returning');
     if (phase === 'returning' && observed.atHome && observed.fleet.state.kind === 'docked') persist('servicing');
     // Reobserve only when the persisted phase changes the decision. Action
     // planners and executePlan independently refresh their own prerequisites.
-    if (phase !== initialPhase) observed = await observeScanning(client,rpc,settings,assignment,phase);
+    if (phase !== initialPhase) {
+      observed = await observeScanning(client,rpc,settings,assignment,phase);
+      timer.complete('observation');
+    }
     const decision = observed.decision;
     if (decision.kind === 'blocked') throw new Error(decision.reason);
     if (decision.kind === 'wait') return {kind:'waiting',untilUnixSeconds:decision.until,detail:decision.detail};
@@ -201,8 +226,9 @@ export async function executeNextScanningStepOnce(settings: AppSettings, secretK
       persist('scanning');
     }
     const plan = await planScanningAction(client,observed,decision.kind,assignment);
+    timer.complete('planning');
     const result = await executeGuardedPlan({settings, context:client.context, rpc, plan, authority:observed.authorization.authority,
-      secretKey, fleetAddress:assignment.fleetAddress, observeConfirmed:() => scanPostcondition(client,observed,decision.kind)});
-    return {kind:'confirmed',action:decision.kind,signature:result.signature,detail:`${plan.summary}; confirmed at slot ${result.slot}`};
+      secretKey, fleetAddress:assignment.fleetAddress, observeConfirmed:() => scanPostcondition(client,observed,decision.kind), timer});
+    return {kind:'confirmed',action:decision.kind,signature:result.signature,detail:`${plan.summary}; confirmed at slot ${result.slot}; ${formatActionTimings(result.timings)}`,continueImmediately:true};
   } finally { await client.dispose(); }
 }

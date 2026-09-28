@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AutomaticCopperRunner, nextAutomationTickDelayMs, shouldAutoRetryPaused } from '../src/automation-runner.js';
 import { AepaDatabase, type AutomationAssignmentRecord } from '../src/database.js';
+import { readFile } from 'node:fs/promises';
 
 function enabledDatabase(): AepaDatabase {
   const database = new AepaDatabase(':memory:');
@@ -30,6 +31,39 @@ test('runs only one transaction at a time and durably records confirmed progress
   assert.equal(calls, 1);
   assert.equal(database.getAutomationAssignment()?.targetStopAtUnixSeconds, 2_000n);
   assert.equal(database.listAutomationActivity()[0].signature, 'sig-1');
+  database.close();
+});
+
+test('continues explicitly safe confirmed phases in one bounded runner tick', async () => {
+  const database = enabledDatabase();
+  let calls = 0;
+  const runner = new AutomaticCopperRunner(database, async () => {
+    calls += 1;
+    if (calls <= 2) return {
+      kind: 'confirmed', action: `phase-${calls}`, signature: `sig-${calls}`,
+      detail: `phase ${calls}`, continueImmediately: true,
+    };
+    return { kind: 'waiting', untilUnixSeconds: 2_000n, detail: 'Arrival pending' };
+  });
+  assert.deepEqual(await runner.tick(), { kind: 'waiting', untilUnixSeconds: 2_000n });
+  assert.equal(calls, 3);
+  assert.deepEqual(
+    database.listAutomationActivity().filter((row) => row.kind === 'confirmed').map((row) => row.signature),
+    ['sig-2', 'sig-1'],
+  );
+  database.close();
+});
+
+test('same-run continuation has a hard transaction bound', async () => {
+  const database = enabledDatabase();
+  let calls = 0;
+  const runner = new AutomaticCopperRunner(database, async () => ({
+    kind: 'confirmed', action: `phase-${++calls}`, signature: `sig-${calls}`,
+    detail: 'continued phase', continueImmediately: true,
+  }));
+  assert.equal((await runner.tick()).kind, 'confirmed');
+  assert.equal(calls, 4);
+  assert.equal(database.listAutomationActivity().filter((row) => row.kind === 'confirmed').length, 4);
   database.close();
 });
 
@@ -247,4 +281,16 @@ test('scanning wait activity is not labelled as stop-mining',async()=>{
   await runner.tick();
   assert.equal(database.listAutomationActivity()[0].action,'scanning');
   database.close();
+});
+
+test('mining confirmed detail includes observation through post-state timings', async () => {
+  const automatic = await readFile(new URL('../src/automatic-c4.ts', import.meta.url), 'utf8')
+    .catch(() => readFile(new URL('../../src/automatic-c4.ts', import.meta.url), 'utf8'));
+  const c4 = await readFile(new URL('../src/c4.ts', import.meta.url), 'utf8')
+    .catch(() => readFile(new URL('../../src/c4.ts', import.meta.url), 'utf8'));
+  assert.match(automatic, /formatActionTimings\(timer\.snapshot\(\)\)/);
+  assert.match(automatic, /executeNextMiningStepOnce/);
+  assert.doesNotMatch(automatic, /inspectNextCopperStep\(/);
+  assert.match(c4, /onProgress\?\.\('transaction-confirmed'/);
+  assert.match(c4, /onProgress\?\.\('post-state-observed'/);
 });

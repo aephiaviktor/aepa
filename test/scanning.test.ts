@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { scanCargoCosts, scanningPatternOption, validateScanSector } from '../src/scanning-model.js';
 
 test('scan consumption rounds each configured cost before aggregating, using exact integers', () => {
@@ -26,4 +27,20 @@ test('region research is evaluated at the exact signed sector including boundary
   assert.equal(scanSectorRegion([region],-2,0)?.available,false);
   assert.equal(scanSectorRegion([region],2,2)?.id,3);
   assert.equal(scanSectorRegion([region],3,0),undefined);
+});
+
+test('scanning reuses shared pattern, policy, and region configuration through bounded TTL caches', async () => {
+  const source = await readFile(new URL('../src/scanning-c4.ts', import.meta.url), 'utf8')
+    .catch(() => readFile(new URL('../../src/scanning-c4.ts', import.meta.url), 'utf8'));
+  assert.match(source, /new TtlPromiseCache<[\s\S]*?\(SCANNING_CATALOG_TTL_MS\)/);
+  assert.match(source, /patternCache\.get/);
+  assert.match(source, /regionCache\.get/);
+  assert.match(source, /const SCANNING_CATALOG_TTL_MS = 5 \* 60_000/);
+});
+
+test('scanning persists per-stage action timings in confirmed activity detail', async () => {
+  const source = await readFile(new URL('../src/scanning-c4.ts', import.meta.url), 'utf8')
+    .catch(() => readFile(new URL('../../src/scanning-c4.ts', import.meta.url), 'utf8'));
+  assert.match(source, /new ActionStageTimer\(\)/);
+  assert.match(source, /formatActionTimings\(result\.timings\)/);
 });

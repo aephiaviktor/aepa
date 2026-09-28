@@ -4,6 +4,7 @@ import { createKeyPairSignerFromBytes, createSolanaRpc, getTransactionDecoder, g
 import { rawRecorderFor, type OperationRecorder } from './raw-capture-runtime.js';
 import { sendSignedWireOnce, SignedSimulationFailedError, type SignedSimulationRpc, type SendOnlyRpc } from './signed-simulation.js';
 import type { AppSettings } from './settings.js';
+import { ActionStageTimer, type ActionTimings } from './action-timing.js';
 
 /** SDK execution performs its fresh precondition revalidation before signing.
  * This transport adds AEPA's signature-verified simulation and the same durable
@@ -13,17 +14,21 @@ export function guardedPlanTransport(
   recorder: OperationRecorder,
   onSubmission: () => void,
   beforeSubmission: () => Promise<void> = async () => undefined,
+  timer?: ActionStageTimer,
 ) {
   return {
     sendTransaction(wire: Base64EncodedWireTransaction) {
       return {send: async () => {
+        timer?.complete('atlas-prepare');
         const simulation = await rpc.simulateTransaction(wire, {commitment:'confirmed',encoding:'base64',sigVerify:true,replaceRecentBlockhash:false}).send();
         if (simulation.value.err !== null) throw new SignedSimulationFailedError(simulation.value.err, simulation.value.logs ?? []);
+        timer?.complete('simulation');
         const signature = getSignatureFromTransaction(getTransactionDecoder().decode(Buffer.from(wire,'base64')));
         await beforeSubmission();
         const outcome = await sendSignedWireOnce(rpc,wire,signature,stage => {
           if (stage === 'send-starting') onSubmission();
         },recorder);
+        timer?.complete('send');
         return outcome.signature;
       }};
     },
@@ -52,7 +57,9 @@ export async function executeGuardedPlan(input: {
   observeConfirmed(): Promise<boolean>;
   beforeSubmission?(): Promise<void>;
   onSubmission?(): void;
-}): Promise<{signature: string; slot: bigint}> {
+  timer?: ActionStageTimer;
+}): Promise<{signature: string; slot: bigint; timings: ActionTimings}> {
+  const timer = input.timer ?? new ActionStageTimer();
   const signer = await createKeyPairSignerFromBytes(input.secretKey);
   if (signer.address !== input.authority) throw new Error('Stored signer does not match active Profile authority');
   const recorder = rawRecorderFor(input.settings, `fleet:${input.fleetAddress}`);
@@ -61,7 +68,7 @@ export async function executeGuardedPlan(input: {
   const transport = guardedPlanTransport(input.rpc,recorder,() => {
     input.onSubmission?.();
     submitted = true;
-  }, input.beforeSubmission);
+  }, input.beforeSubmission, timer);
   // Forward read/confirmation RPCs unchanged; replace only the write boundary.
   const writeRpc = new Proxy(input.rpc, {get(target,key) {
     if (key !== 'sendTransaction') return Reflect.get(target,key);
@@ -77,7 +84,10 @@ export async function executeGuardedPlan(input: {
     if (submitted) throw new Error('Submitted transaction requires reconciliation; it must not be resubmitted');
     throw gateFailure ?? error;
   }
+  timer.complete('confirmation');
   // SDK maps transport exceptions to unknown, including a failed pre-send gate.
   if (gateFailure && !submitted) throw gateFailure;
-  return finishGuardedPlan(result,input.observeConfirmed,recorder);
+  const finished = await finishGuardedPlan(result,input.observeConfirmed,recorder);
+  timer.complete('post-state');
+  return { ...finished, timings: timer.snapshot() };
 }

@@ -20,10 +20,17 @@ test('Transport executor uses guarded plans and persists only confirmed next pha
   assert.match(source,/planUnloadFleetCrew/);
   assert.match(source,/validateTransportQuantities/);
   assert.match(source,/setTransportAttempt/);
+  assert.match(source,/new ActionStageTimer\(\)/);
+  assert.match(source,/formatActionTimings\(result\.timings\)/);
   assert.match(source,/onSubmission:\s*\(\)\s*=>\s*database\.setTransportAttempt/);
   assert.doesNotMatch(source,/const plan = await planAction[\s\S]*?database\.setTransportAttempt[\s\S]*?const result = await executeGuardedPlan/);
   assert.match(source,/must not be retried automatically/);
   assert.doesNotMatch(source,/executePlan\(/);
+  assert.match(
+    source,
+    /client\.systems\.get\(address\(assignment\.destinationAddress\),\s*READ\)/,
+  );
+  assert.doesNotMatch(source, /client\.systems\.all\(READ\)/);
 });
 
 test('crew and cargo transfers are separate confirmed actions', async () => {

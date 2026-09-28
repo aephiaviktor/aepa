@@ -1,19 +1,12 @@
 import {
-  executeAuthorizedDockOnce,
-  executeAuthorizedLoadOnce,
-  executeAuthorizedRegisterStarbaseOnce,
-  executeAuthorizedStartMiningOnce,
-  executeAuthorizedStopMiningOnce,
-  executeAuthorizedUndockOnce,
-  executeAuthorizedUnloadOnce,
-  inspectNextCopperStep,
+  executeNextMiningStepOnce,
   PLAN_STAGE_MARKER,
   type AuthorizedLiveAction,
-  type LiveCopperStepResult,
   type MiningLoopScope,
 } from './c4.js';
 import type { AppSettings } from './settings.js';
-import { stoppingDirective, type AutomationStopMode } from './automation-stop.js';
+import type { AutomationStopMode } from './automation-stop.js';
+import { ActionStageTimer, formatActionTimings, type ActionStage } from './action-timing.js';
 
 export { PLAN_STAGE_MARKER };
 
@@ -52,24 +45,14 @@ export type AutomaticCopperStepResult = {
   resultingFleetState: string;
   resultingNextStep: string;
   targetStopAtUnixSeconds?: bigint;
+  continueImmediately?: boolean;
 };
 
 type ProgressCallback = (stage: string, details?: Readonly<Record<string, string>>) => void;
-type ActionExecutor = (settings: AppSettings, secretKey: Uint8Array, onProgress?: ProgressCallback, fleetName?: string, fleetAddress?: string, scope?: MiningLoopScope) => Promise<LiveCopperStepResult>;
 
-const ACTION_EXECUTORS: Readonly<Record<AuthorizedLiveAction, ActionExecutor>> = {
-  'register-starbase': executeAuthorizedRegisterStarbaseOnce,
-  dock: executeAuthorizedDockOnce,
-  unload: executeAuthorizedUnloadOnce,
-  load: executeAuthorizedLoadOnce,
-  undock: executeAuthorizedUndockOnce,
-  'start-mining': executeAuthorizedStartMiningOnce,
-  'stop-mining': executeAuthorizedStopMiningOnce,
-};
-
-/** Executes at most one action selected from a read-only fresh-state inspection.
- * The action-specific executor re-reads state, verifies the exact action and
- * authority, signs, simulates, sends once, and confirms before returning.
+/** Executes at most one action from one fresh observation/client session.
+ * The selected Plan reuses that observation, then Atlas Kit revalidates its
+ * preconditions before AEPA signs, simulates, sends once, and confirms.
  */
 export async function executeNextCopperStepOnce(
   settings: AppSettings,
@@ -81,39 +64,41 @@ export async function executeNextCopperStepOnce(
   scope?: MiningLoopScope,
   stopMode?: AutomationStopMode,
 ): Promise<AutomaticCopperStepResult> {
-  const inspection = await inspectNextCopperStep(settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
-  const directive = stopMode
-    ? stoppingDirective(stopMode, inspection.fleetState, inspection.decision.kind)
-    : 'continue';
-  if (directive === 'complete') {
-    return { kind: 'stopped', detail: `Fleet ${fleetName} is docked at ${scope?.homeSystemName ?? 'Home Starbase'}, unloaded, refilled, and Automation is disabled` };
-  }
-  if (directive === 'continue' && inspection.decision.kind === 'wait') {
-    return {
-      kind: 'waiting',
-      untilUnixSeconds: inspection.decision.untilUnixSeconds,
-      detail: `Mining remains active until ${inspection.decision.untilUnixSeconds.toString()}`,
-    };
-  }
-  if (directive === 'continue' && inspection.decision.kind === 'blocked') throw new Error(inspection.decision.reason);
-  const action = directive === 'stop-mining' || directive === 'dock'
-    ? directive
-    : inspection.decision.kind as AuthorizedLiveAction;
-  const targetStop = action === 'start-mining'
-    ? BigInt(Math.floor(Date.now() / 1_000)) + inspection.targetMiningSeconds
-    : undefined;
-  onProgress?.('automatic-action-selected', {
-    action,
-    ...(targetStop === undefined ? {} : { targetStopAtUnixSeconds: targetStop.toString() }),
-  });
-  const result = await ACTION_EXECUTORS[action](settings, secretKey, onProgress, fleetName, fleetAddress, scope);
+  const timer = new ActionStageTimer();
+  const completedByProgress: Readonly<Record<string, ActionStage>> = {
+    'automatic-observation-complete': 'observation',
+    'fresh-action-verified': 'planning',
+    'transaction-assembled': 'atlas-prepare',
+    'simulation-verified': 'simulation',
+    'send-returned': 'send',
+    'transaction-confirmed': 'confirmation',
+    'post-state-observed': 'post-state',
+  };
+  const timedProgress: ProgressCallback = (stage, details) => {
+    const completed = completedByProgress[stage];
+    if (completed) timer.complete(completed);
+    onProgress?.(stage, details);
+  };
+  const execution = await executeNextMiningStepOnce(
+    settings,
+    secretKey,
+    targetStopAtUnixSeconds,
+    timedProgress,
+    fleetName,
+    fleetAddress,
+    scope,
+    stopMode,
+  );
+  if (execution.kind !== 'confirmed') return execution;
+  const { action, result, targetStopAtUnixSeconds: targetStop } = execution;
   return {
     kind: 'confirmed',
     action,
     signature: result.transactionSignature,
     resultingFleetState: result.resultingFleetState,
     resultingNextStep: result.resultingNextStep,
-    detail: `${result.summary}; ${result.confirmationStatus} at slot ${result.confirmationSlot}; resulting state ${result.resultingFleetState}`,
+    detail: `${result.summary}; ${result.confirmationStatus} at slot ${result.confirmationSlot}; resulting state ${result.resultingFleetState}; ${formatActionTimings(timer.snapshot())}`,
+    continueImmediately: result.resultingNextStep !== 'waiting',
     ...(targetStop === undefined ? {} : { targetStopAtUnixSeconds: targetStop }),
   };
 }

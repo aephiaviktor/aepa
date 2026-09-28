@@ -1,5 +1,5 @@
 import { rawRecorderFor } from './raw-capture-runtime.js';
-import { createSageClient, resolveCargo, type FleetView } from '@aephia/atlas-kit';
+import { createSageClient, resolveCargo, type AsteroidView, type FleetView, type StarSystemView } from '@aephia/atlas-kit';
 import { getStarbasePlayerForCharacterAtSystem } from '@aephia/atlas-kit/starbases';
 import { planFleetTransferCargoAtStarbase } from '@aephia/atlas-kit/cargo/actions';
 import { planFleetDock, planFleetUndock } from '@aephia/atlas-kit/fleets/actions';
@@ -16,6 +16,7 @@ import { assertMiningResourcesAvailable, resolveMiningResourceEligibility } from
 import { appendStopMiningCareerXp, planStartMiningResource, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
+import { stoppingDirective, type AutomationStopMode } from './automation-stop.js';
 
 import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed-simulation.js';
 
@@ -209,12 +210,17 @@ function ceilRatio(value: Rational): bigint {
   return (value.numerator + value.denominator - 1n) / value.denominator;
 }
 
-async function buildMiningLoopPreview(sage: ReturnType<typeof createSageClient>, fleet: FleetView, scope: MiningLoopScope = DEFAULT_MINING_SCOPE): Promise<CopperLoopPreview> {
-  const home = await sage.systems.byId(scope.homeSystemId, { commitment: 'confirmed', policy: 'no-store' });
+async function buildMiningLoopPreview(
+  sage: ReturnType<typeof createSageClient>,
+  fleet: FleetView,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
+  observed?: { home: StarSystemView; asteroid: AsteroidView },
+): Promise<CopperLoopPreview> {
+  const home = observed?.home ?? await sage.systems.byId(scope.homeSystemId, { commitment: 'confirmed', policy: 'no-store' });
   if (home.name !== scope.homeSystemName) throw new Error(`C4 system id ${scope.homeSystemId} is ${home.name}, not ${scope.homeSystemName}`);
-  const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
-  const asteroid = asteroids.find((candidate) => String(candidate.address) === scope.destinationAddress);
-  if (!asteroid) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
+  const body = observed?.asteroid ?? await sage.celestialBodies.get(address(scope.destinationAddress), { commitment: 'confirmed', policy: 'no-store' });
+  if (body.kind !== 'asteroid' || body.system.address !== home.address) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
+  const asteroid = body;
   const ids = scope.resourceIds ?? [scope.resourceId];
   const resourceCargo = await Promise.all(ids.map(id => resolveCargo(sage.context, id)));
   const food = await resolveCargo(sage.context, 1);
@@ -430,20 +436,20 @@ async function observeMiningLoop(
   scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ) {
   const profileAddress = address(settings.playerProfile);
-  const [profile, character, home] = await Promise.all([
+  const [profile, character, home, directFleet, body] = await Promise.all([
     sage.profiles.get(profileAddress, { commitment: 'confirmed', policy: 'no-store' }),
     sage.characters.forProfile(profileAddress, { commitment: 'confirmed', policy: 'no-store' }),
     sage.systems.byId(scope.homeSystemId, { commitment: 'confirmed', policy: 'no-store' }),
+    fleetAddress ? sage.fleets.get(address(fleetAddress), { commitment: 'confirmed', policy: 'no-store' }) : Promise.resolve(undefined),
+    sage.celestialBodies.get(address(scope.destinationAddress), { commitment: 'confirmed', policy: 'no-store' }),
   ]);
   if (home.name !== scope.homeSystemName) throw new Error(`Configured Home Starbase system is ${home.name}, not ${scope.homeSystemName}`);
-  const fleets = await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' });
-  const fleet = fleets.find((candidate) => fleetAddress ? String(candidate.address) === fleetAddress : candidate.name === fleetName);
+  const fleet = directFleet ?? (await character.fleets.all({ commitment: 'confirmed', policy: 'no-store' })).find((candidate) => candidate.name === fleetName);
   if (!fleet) throw new Error(`Fleet ${fleetName} was not found`);
   if (fleet.name !== fleetName) throw new Error(`Fleet identity mismatch: ${fleetAddress} is ${fleet.name}, not ${fleetName}`);
-  const asteroids = await home.asteroids.all({ commitment: 'confirmed', policy: 'no-store' });
-  const asteroid = asteroids.find((candidate) => String(candidate.address) === scope.destinationAddress);
-  if (!asteroid) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
-  const preview = await buildMiningLoopPreview(sage, fleet, scope);
+  if (body.kind !== 'asteroid' || body.system.address !== home.address) throw new Error(`C4 asteroid ${scope.destinationName} was not found in ${scope.homeSystemName}`);
+  const asteroid = body;
+  const preview = await buildMiningLoopPreview(sage, fleet, scope, { home, asteroid });
   const key = activeProfileKey(profile);
   const authorization = { profile: profileAddress, authority: key.authority, keyIndex: key.keyIndex };
   const baseDecision = decideCopperLoopNextStep({
@@ -722,25 +728,21 @@ export async function inspectNextCopperStep(settings: AppSettings, targetStopAtU
   }
 }
 
-/** Executes only one explicitly authorized MF-01 action. It performs one
- * signature-verified simulation, one send call, then read-only confirmation and
- * state checks. It never retries or advances to the following action.
- */
-async function executeAuthorizedCopperStepOnce(
+type PreparedCopperStep = Awaited<ReturnType<typeof prepareNextCopperStep>>;
+
+async function executePreparedCopperStep(
+  sage: ReturnType<typeof createSageClient>,
+  rpc: ReturnType<typeof createSolanaRpc>,
   settings: AppSettings,
   secretKey: Uint8Array,
   expectedAction: AuthorizedLiveAction,
+  prepared: PreparedCopperStep,
   onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
   fleetName = 'MF-01',
   fleetAddress?: string,
   scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
 ): Promise<LiveCopperStepResult> {
-  if (!settings.playerProfile) throw new Error(`Configure a Player Profile before executing the authorized ${expectedAction}`);
-  const rpc = createSolanaRpc(settings.rpcUrl);
-  const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
-  try {
-    const prepared = await prepareNextCopperStep(sage, settings, expectedAction, undefined, fleetName, fleetAddress, scope);
-    assertAuthorizedCopperStep(expectedAction, {
+  assertAuthorizedCopperStep(expectedAction, {
       fleet: prepared.fleet.name,
       action: prepared.decision.kind,
       authority: prepared.key.authority,
@@ -775,32 +777,33 @@ async function executeAuthorizedCopperStepOnce(
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     if (!confirmed) throw new Error(`${expectedAction} transaction ${submission.signature} was submitted once but confirmation was not observed within 90 seconds; it must not be resubmitted`);
+    onProgress?.('transaction-confirmed', { slot: confirmed.slot.toString(), status: confirmed.confirmationStatus });
 
     const stateDeadline = Date.now() + 45_000;
     let resultingFleetState: string;
     let resultingNextStep: string;
     if (expectedAction === 'start-mining') {
-      let miningFleet: Awaited<ReturnType<typeof loadC4Fleets>>['fleets'][number] | undefined;
+      let miningFleet = await sage.fleets.get(prepared.fleet.address, { commitment: 'confirmed', policy: 'no-store' });
       while (Date.now() < stateDeadline) {
-        const snapshot = await loadC4Fleets(settings);
-        miningFleet = snapshot.fleets.find((fleet) => fleetAddress ? fleet.address === fleetAddress : fleet.name === fleetName);
-        if (miningFleet?.state === 'mining') break;
+        if (miningFleet.state.kind === 'mining') break;
         await new Promise((resolve) => setTimeout(resolve, 1_000));
+        miningFleet = await sage.fleets.get(prepared.fleet.address, { commitment: 'confirmed', policy: 'no-store' });
       }
-      if (miningFleet?.state !== 'mining') throw new Error(`start-mining transaction ${submission.signature} confirmed, but mining state was not observed within 45 seconds`);
-      resultingFleetState = miningFleet.state;
+      if (miningFleet.state.kind !== 'mining') throw new Error(`start-mining transaction ${submission.signature} confirmed, but mining state was not observed within 45 seconds`);
+      resultingFleetState = miningFleet.state.kind;
       resultingNextStep = 'waiting';
     } else {
-      let resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress, scope);
+      let resulting = await observeMiningLoop(sage, settings, undefined, fleetName, fleetAddress ?? String(prepared.fleet.address), scope);
       while (resulting.decision.kind === expectedAction && Date.now() < stateDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
-        resulting = await prepareNextCopperStep(sage, settings, undefined, undefined, fleetName, fleetAddress, scope);
+        resulting = await observeMiningLoop(sage, settings, undefined, fleetName, fleetAddress ?? String(prepared.fleet.address), scope);
       }
       if (resulting.decision.kind === expectedAction) throw new Error(`${expectedAction} transaction ${submission.signature} confirmed, but the resulting fleet state was not observed within 45 seconds`);
       resultingFleetState = resulting.fleet.state.kind;
       resultingNextStep = resulting.decision.kind;
     }
 
+    onProgress?.('post-state-observed', { fleetState: resultingFleetState, nextStep: resultingNextStep });
     await recorder.complete();
     return {
       fleet: fleetName,
@@ -815,6 +818,82 @@ async function executeAuthorizedCopperStepOnce(
       resultingFleetState,
       resultingNextStep,
     };
+}
+
+/** Executes only one explicitly authorized action. It performs one
+ * signature-verified simulation, one send call, then read-only confirmation and
+ * state checks. It never retries or advances to the following action.
+ */
+async function executeAuthorizedCopperStepOnce(
+  settings: AppSettings,
+  secretKey: Uint8Array,
+  expectedAction: AuthorizedLiveAction,
+  onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
+): Promise<LiveCopperStepResult> {
+  if (!settings.playerProfile) throw new Error(`Configure a Player Profile before executing the authorized ${expectedAction}`);
+  const rpc = createSolanaRpc(settings.rpcUrl);
+  const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
+  try {
+    const prepared = await prepareNextCopperStep(sage, settings, expectedAction, undefined, fleetName, fleetAddress, scope);
+    return await executePreparedCopperStep(sage, rpc, settings, secretKey, expectedAction, prepared, onProgress, fleetName, fleetAddress, scope);
+  } finally {
+    await sage.dispose();
+  }
+}
+
+export type NextMiningStepResult =
+  | { kind: 'waiting'; untilUnixSeconds: bigint; detail: string }
+  | { kind: 'stopped'; detail: string }
+  | { kind: 'confirmed'; action: AuthorizedLiveAction; result: LiveCopperStepResult; targetStopAtUnixSeconds?: bigint };
+
+/** Observes, selects, plans, and executes one mining-loop action in one client
+ * session. The selected action reuses the exact fresh snapshots that selected
+ * it; Atlas Kit still performs its own final Plan precondition refresh.
+ */
+export async function executeNextMiningStepOnce(
+  settings: AppSettings,
+  secretKey: Uint8Array,
+  targetStopAtUnixSeconds?: bigint,
+  onProgress?: (stage: string, details?: Readonly<Record<string, string>>) => void,
+  fleetName = 'MF-01',
+  fleetAddress?: string,
+  scope: MiningLoopScope = DEFAULT_MINING_SCOPE,
+  stopMode?: AutomationStopMode,
+): Promise<NextMiningStepResult> {
+  if (!settings.playerProfile) throw new Error('Configure a Player Profile before executing Automation');
+  const rpc = createSolanaRpc(settings.rpcUrl);
+  const sage = createSageClient({ cluster: 'zink-ptr', rpc, writeRpc: rpc });
+  try {
+    const observed = await observeMiningLoop(sage, settings, targetStopAtUnixSeconds, fleetName, fleetAddress, scope);
+    onProgress?.('automatic-observation-complete');
+    const directive = stopMode
+      ? stoppingDirective(stopMode, observed.fleet.state.kind, observed.decision.kind)
+      : 'continue';
+    if (directive === 'complete') {
+      return { kind: 'stopped', detail: `Fleet ${fleetName} is docked at ${scope.homeSystemName}, unloaded, refilled, and Automation is disabled` };
+    }
+    if (directive === 'continue' && observed.decision.kind === 'wait') {
+      return { kind: 'waiting', untilUnixSeconds: observed.decision.untilUnixSeconds, detail: `Mining remains active until ${observed.decision.untilUnixSeconds.toString()}` };
+    }
+    if (directive === 'continue' && observed.decision.kind === 'blocked') throw new Error(observed.decision.reason);
+    const action = directive === 'stop-mining' || directive === 'dock'
+      ? directive
+      : observed.decision.kind as AuthorizedLiveAction;
+    const nextTargetStop = action === 'start-mining'
+      ? BigInt(Math.floor(Date.now() / 1_000)) + BigInt(observed.preview.targetMiningSeconds)
+      : undefined;
+    onProgress?.('automatic-action-selected', {
+      action,
+      ...(nextTargetStop === undefined ? {} : { targetStopAtUnixSeconds: nextTargetStop.toString() }),
+    });
+    const decision = { kind: action } as AutomaticMiningDecision;
+    const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl, scope);
+    const prepared = { ...observed, decision, plan } as PreparedCopperStep;
+    const result = await executePreparedCopperStep(sage, rpc, settings, secretKey, action, prepared, onProgress, fleetName, fleetAddress, scope);
+    return { kind: 'confirmed', action, result, ...(nextTargetStop === undefined ? {} : { targetStopAtUnixSeconds: nextTargetStop }) };
   } finally {
     await sage.dispose();
   }

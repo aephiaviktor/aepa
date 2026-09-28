@@ -147,6 +147,13 @@ test('Transport editor exposes target, cargo, return cargo, and crew controls', 
   assert.match(main, /executeNextTransportStepOnce/);
 });
 
+test('automatic execution avoids a redundant Profile authority RPC read', async () => {
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  const runnerBody = main.match(/automationRunner = new AutomaticCopperRunner[\s\S]*?\n  \}\);/)?.[0] ?? '';
+  assert.doesNotMatch(runnerBody, /getActiveC4ProfileAuthority\(/);
+  assert.match(runnerBody, /withStoredSigner\(/);
+});
+
 test('travel mode precedes mining destination and same-system wording stays compact', async () => {
   const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
   assert.ok(source.indexOf('aria-label="Travel"') < source.indexOf('aria-label="Mining Destination"'));

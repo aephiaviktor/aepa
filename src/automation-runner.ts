@@ -4,6 +4,7 @@ import { isPostSubmissionFailure } from './automatic-c4.js';
 
 const FAST_FOLLOW_AFTER_CONFIRM_MS = 2_500;
 const MIN_REFRESH_INTERVAL_MS = 15_000;
+const MAX_CONTINUED_ACTIONS = 4;
 
 /** True when a paused assignment can be retried automatically: the pause is
  * plan-stage (nothing was submitted) and never a post-submission failure,
@@ -43,6 +44,9 @@ export type AutomaticStepOutcome = {
   resultingFleetState?: string;
   resultingNextStep?: string;
   targetStopAtUnixSeconds?: bigint;
+  /** Explicit opt-in: the confirmed post-state is safe to reobserve and use
+   * for another distinct transaction in this same serialized runner tick. */
+  continueImmediately?: boolean;
 };
 
 export type AutomaticTickResult =
@@ -71,41 +75,49 @@ export class AutomaticCopperRunner {
       if (!runnable.some(candidate => candidate.fleetAddress === address && candidate.stopMode)) this.prioritizedStops.delete(address);
     }
     const urgent = runnable.find(candidate => candidate.stopMode && this.prioritizedStops.get(candidate.fleetAddress) !== candidate.stopRequestedAt);
-    const assignment = urgent ?? runnable[this.nextFleetIndex % runnable.length]!;
+    let assignment = urgent ?? runnable[this.nextFleetIndex % runnable.length]!;
     if (urgent) this.prioritizedStops.set(urgent.fleetAddress, urgent.stopRequestedAt!);
     else this.nextFleetIndex = (this.nextFleetIndex + 1) % runnable.length;
     this.running = true;
     try {
-      const outcome = await this.executeStep(assignment);
-      if (outcome.kind === 'waiting') {
-        const marker = `waiting:${outcome.untilUnixSeconds.toString()}`;
-        if (assignment.lastAction !== marker) {
-          this.database.setAutomationLastAction(marker, assignment.fleetAddress);
-          this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: assignment.assignment === 'scanning' ? 'scanning' : 'stop-mining', detail: outcome.detail });
+      let lastConfirmed: Extract<AutomaticTickResult, { kind: 'confirmed' }> | undefined;
+      for (let continued = 0; continued < MAX_CONTINUED_ACTIONS; continued++) {
+        const outcome = await this.executeStep(assignment);
+        if (outcome.kind === 'waiting') {
+          const marker = `waiting:${outcome.untilUnixSeconds.toString()}`;
+          if (assignment.lastAction !== marker) {
+            this.database.setAutomationLastAction(marker, assignment.fleetAddress);
+            this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: assignment.assignment === 'scanning' ? 'scanning' : 'stop-mining', detail: outcome.detail });
+          }
+          return { kind: 'waiting', untilUnixSeconds: outcome.untilUnixSeconds };
         }
-        return { kind: 'waiting', untilUnixSeconds: outcome.untilUnixSeconds };
+        if (outcome.kind === 'stopped') {
+          this.database.completeAutomationStop(assignment.fleetAddress);
+          this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', action: 'stop-automation', detail: outcome.detail });
+          return { kind: 'disabled' };
+        }
+        if (outcome.action === 'start-mining' && outcome.targetStopAtUnixSeconds === undefined) {
+          throw new Error('Confirmed start-mining did not produce a durable target stop time');
+        }
+        const stopped = this.database.confirmAutomationAction({
+          fleetAddress: assignment.fleetAddress,
+          fleetName: assignment.fleetName,
+          action: outcome.action,
+          signature: outcome.signature,
+          detail: outcome.detail,
+          ...(assignment.stopMode && outcome.resultingFleetState === 'docked' && outcome.resultingNextStep === 'undock'
+            ? { completeStop: { mode: assignment.stopMode, requestedAt: assignment.stopRequestedAt, updatedAt: assignment.updatedAt } }
+            : {}),
+          ...(outcome.targetStopAtUnixSeconds === undefined ? {} : { targetStopAtUnixSeconds: outcome.targetStopAtUnixSeconds }),
+        });
+        if (stopped) return { kind: 'disabled' };
+        lastConfirmed = { kind: 'confirmed', action: outcome.action, signature: outcome.signature };
+        if (!outcome.continueImmediately) return lastConfirmed;
+        const refreshed = this.database.getAutomationAssignment(assignment.fleetAddress);
+        if (!refreshed?.enabled || refreshed.status !== 'running') return lastConfirmed;
+        assignment = refreshed;
       }
-      if (outcome.kind === 'stopped') {
-        this.database.completeAutomationStop(assignment.fleetAddress);
-        this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', action: 'stop-automation', detail: outcome.detail });
-        return { kind: 'disabled' };
-      }
-      if (outcome.action === 'start-mining' && outcome.targetStopAtUnixSeconds === undefined) {
-        throw new Error('Confirmed start-mining did not produce a durable target stop time');
-      }
-      const stopped = this.database.confirmAutomationAction({
-        fleetAddress: assignment.fleetAddress,
-        fleetName: assignment.fleetName,
-        action: outcome.action,
-        signature: outcome.signature,
-        detail: outcome.detail,
-        ...(assignment.stopMode && outcome.resultingFleetState === 'docked' && outcome.resultingNextStep === 'undock'
-          ? { completeStop: { mode: assignment.stopMode, requestedAt: assignment.stopRequestedAt, updatedAt: assignment.updatedAt } }
-          : {}),
-        ...(outcome.targetStopAtUnixSeconds === undefined ? {} : { targetStopAtUnixSeconds: outcome.targetStopAtUnixSeconds }),
-      });
-      if (stopped) return { kind: 'disabled' };
-      return { kind: 'confirmed', action: outcome.action, signature: outcome.signature };
+      return lastConfirmed!;
     } catch (error) {
       const detail = String((error as Error)?.message ?? error);
       const planStage = error instanceof PlannerStageError ? `${PLAN_STAGE_MARKER} ` : '';

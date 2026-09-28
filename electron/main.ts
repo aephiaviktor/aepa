@@ -183,9 +183,10 @@ app.whenReady().then(() => {
         database.recordAutomationActivity({ fleetAddress: effective.fleetAddress, fleetName: effective.fleetName, kind: 'enabled', detail: `Pending assignment activated at the serviced cycle boundary: ${effective.resourceName} at ${effective.destinationName}` });
       }
     }
-    const expectedAuthority = await getActiveC4ProfileAuthority(settings);
-    return withStoredSigner(signerPath, safeStorage, async (secretKey, publicKey) => {
-      if (publicKey !== expectedAuthority) throw new Error('Stored signer no longer matches the active C4 authority');
+    // Each action's fresh observation and guarded execution verify the active
+    // Profile authority against this signer immediately before submission.
+    // Avoid a separate cold Profile read before starting that same work.
+    return withStoredSigner(signerPath, safeStorage, async (secretKey) => {
       if (effective.assignment === 'scanning') {
         const outcome = await executeNextScanningStepOnce(settings, secretKey, effective, database);
         if (outcome.kind === 'stopped' && effective.pendingAssignment && !effective.stopMode) {
