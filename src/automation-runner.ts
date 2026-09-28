@@ -9,8 +9,12 @@ const MIN_REFRESH_INTERVAL_MS = 15_000;
  * plan-stage (nothing was submitted) and never a post-submission failure,
  * which must stay paused until chain state is reconciled out of band.
  */
-export function shouldAutoRetryPaused(assignment: AutomationAssignmentRecord | undefined): boolean {
+export function shouldAutoRetryPaused(
+  assignment: AutomationAssignmentRecord | undefined,
+  hasPersistedTransportAttempt = false,
+): boolean {
   if (!assignment || assignment.status !== 'paused') return false;
+  if (assignment.assignment === 'transport' && hasPersistedTransportAttempt) return false;
   return !isPostSubmissionFailure(assignment.lastError ?? '');
 }
 

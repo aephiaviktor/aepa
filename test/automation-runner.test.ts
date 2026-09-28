@@ -233,6 +233,8 @@ test('auto-retries plan-stage pauses but never post-submission failures', () => 
     enabled: false, status: 'paused', lastError: 'PLAN_STAGE Planning failed before any send', updatedAt: '2026-09-16T00:00:00Z',
   };
   assert.equal(shouldAutoRetryPaused(base), true);
+  assert.equal(shouldAutoRetryPaused({ ...base, assignment: 'transport' }, true), false);
+  assert.equal(shouldAutoRetryPaused({ ...base, assignment: 'transport' }, false), true);
   assert.equal(shouldAutoRetryPaused({ ...base, status: 'running' }), false);
   assert.equal(shouldAutoRetryPaused({ ...base, lastError: 'submitted once but confirmation was not observed' }), false);
   assert.equal(shouldAutoRetryPaused(undefined), false);

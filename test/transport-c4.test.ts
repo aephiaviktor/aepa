@@ -20,6 +20,8 @@ test('Transport executor uses guarded plans and persists only confirmed next pha
   assert.match(source,/planUnloadFleetCrew/);
   assert.match(source,/validateTransportQuantities/);
   assert.match(source,/setTransportAttempt/);
+  assert.match(source,/onSubmission:\s*\(\)\s*=>\s*database\.setTransportAttempt/);
+  assert.doesNotMatch(source,/const plan = await planAction[\s\S]*?database\.setTransportAttempt[\s\S]*?const result = await executeGuardedPlan/);
   assert.match(source,/must not be retried automatically/);
   assert.doesNotMatch(source,/executePlan\(/);
 });

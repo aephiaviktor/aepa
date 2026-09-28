@@ -17,24 +17,31 @@ test('SDK transport simulates signed wire then durably records before exactly on
   const rpc={simulateTransaction(_wire:unknown,config:unknown) {assert.equal(_wire,wire); assert.deepEqual(config,{commitment:'confirmed',encoding:'base64',sigVerify:true,replaceRecentBlockhash:false}); return {send:async()=>{events.push('simulate');return {context:{slot:1n},value:{err:null,logs:[]}};}};},
     sendTransaction(_wire:unknown,config:unknown) {assert.equal(_wire,wire);assert.deepEqual(config,{encoding:'base64',skipPreflight:true,maxRetries:0n});return {send:async()=>{events.push('send');return signature;}};}};
   const recorder={beforeSend:async(value:{wire:string;signature:string})=>{assert.deepEqual(value,{wire,signature});events.push('durable');},afterSend:async()=>{events.push('submitted');},complete:async()=>{events.push('complete');}};
-  await guardedPlanTransport(rpc,recorder,()=>events.push('boundary')).sendTransaction(wire).send();
-  assert.deepEqual(events,['simulate','durable','boundary','send','submitted']);
+  await guardedPlanTransport(rpc,recorder,()=>events.push('boundary'),async()=>{events.push('semantic');}).sendTransaction(wire).send();
+  assert.deepEqual(events,['simulate','semantic','durable','boundary','send','submitted']);
+});
+test('semantic pre-send failure leaves no durable record, attempt, or send',async()=>{
+  const {wire}=await fixture();const events:string[]=[];
+  const rpc={simulateTransaction(){return {send:async()=>{events.push('simulate');return {context:{slot:1n},value:{err:null,logs:[]}};}};},sendTransaction(){events.push('send');return {send:async()=>''};}};
+  const recorder={beforeSend:async()=>{events.push('durable');},afterSend:async()=>{},complete:async()=>{}};
+  await assert.rejects(()=>guardedPlanTransport(rpc,recorder,()=>events.push('attempt'),async()=>{events.push('semantic');throw new Error('CurrencyCache changed');}).sendTransaction(wire).send(),/CurrencyCache changed/);
+  assert.deepEqual(events,['simulate','semantic']);
 });
 test('simulation and durable-storage failures submit nothing',async()=>{
-  const {wire}=await fixture(); let sends=0;
+  const {wire}=await fixture(); let sends=0;let attempts=0;
   for(const failure of ['simulation','storage']) {
     const rpc={simulateTransaction(){return {send:async()=>({context:{slot:1n},value:{err:failure==='simulation'?{}:null,logs:[]}})};},sendTransaction(){sends++;return {send:async()=>''};}};
     const recorder={beforeSend:async()=>{throw new Error('storage failure');},afterSend:async()=>{},complete:async()=>{}};
-    await assert.rejects(()=>guardedPlanTransport(rpc,recorder,()=>{}).sendTransaction(wire).send());
+    await assert.rejects(()=>guardedPlanTransport(rpc,recorder,()=>{attempts++;}).sendTransaction(wire).send());
   }
-  assert.equal(sends,0);
+  assert.equal(sends,0);assert.equal(attempts,0);
 });
 test('ambiguous send retains unresolved evidence and cannot be auto-retried',async()=>{
-  const {wire}=await fixture();let sends=0;let outcome='';let completed=false;
+  const {wire}=await fixture();let sends=0;let attempts=0;let outcome='';let completed=false;
   const rpc={simulateTransaction(){return {send:async()=>({context:{slot:1n},value:{err:null,logs:[]}})};},sendTransaction(){return {send:async()=>{sends++;throw new Error('lost connection');}};}};
   const recorder={beforeSend:async()=>{},afterSend:async(value:string)=>{outcome=value;},complete:async()=>{completed=true;}};
-  await assert.rejects(()=>guardedPlanTransport(rpc,recorder,()=>{}).sendTransaction(wire).send(),error=>isPostSubmissionFailure(String(error)));
-  assert.equal(sends,1);assert.equal(outcome,'unknown');assert.equal(completed,false);
+  await assert.rejects(()=>guardedPlanTransport(rpc,recorder,()=>{attempts++;}).sendTransaction(wire).send(),error=>isPostSubmissionFailure(String(error)));
+  assert.equal(sends,1);assert.equal(attempts,1);assert.equal(outcome,'unknown');assert.equal(completed,false);
 });
 test('post-state mismatch/read failure/DB completion failure remain unknown barriers; only observed success completes',async()=>{
   const result={status:'confirmed' as const,signature:'sig' as Signature,slot:1n,commitment:'confirmed' as const};

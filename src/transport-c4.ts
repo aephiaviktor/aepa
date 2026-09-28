@@ -22,6 +22,10 @@ import {
   type TransportCargoAmount,
   type TransportPhase,
 } from "./transport-model.js";
+import {
+  adaptWarpLaneCurrencyCachePlan,
+  assertFreshWarpLaneCurrencyCache,
+} from "./transport-plan.js";
 
 const READ = { commitment: "confirmed", policy: "no-store" } as const;
 const CLOCK = address("SysvarC1ock11111111111111111111111111111111");
@@ -677,14 +681,15 @@ export async function executeNextTransportStepOnce(
         continue;
       }
       const action = decision.action!;
-      const plan = await planAction(client, observed, assignment, action);
-      database.setTransportAttempt(
-        assignment.profile,
-        assignment.fleetAddress,
-        phase,
-        action,
-        expectedPost(observed, assignment, action),
-      );
+      let plan = await planAction(client, observed, assignment, action);
+      let currencyCache: Awaited<ReturnType<typeof adaptWarpLaneCurrencyCachePlan>> | undefined;
+      if (plan.kind === "fleet.warp-lane") {
+        const game = client.context.game;
+        if (!game) throw new Error("Configured C4 Game is unavailable");
+        currencyCache = await adaptWarpLaneCurrencyCachePlan(plan, game);
+        plan = currencyCache.plan;
+      }
+      const expected = expectedPost(observed, assignment, action);
       const result = await executeGuardedPlan({
         settings,
         context: client.context,
@@ -693,6 +698,16 @@ export async function executeNextTransportStepOnce(
         authority: observed.authorization.authority,
         secretKey,
         fleetAddress: assignment.fleetAddress,
+        beforeSubmission: currencyCache
+          ? () => assertFreshWarpLaneCurrencyCache(rpc, currencyCache.currencyCache)
+          : undefined,
+        onSubmission: () => database.setTransportAttempt(
+          assignment.profile,
+          assignment.fleetAddress,
+          phase,
+          action,
+          expected,
+        ),
         observeConfirmed: () =>
           postcondition(client, observed, assignment, action),
       });

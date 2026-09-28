@@ -77,7 +77,13 @@ function scheduleAutomationTick(delayMs = 0): void {
     const now = Date.now();
     if (now - lastAutoReconnectAt >= AUTO_RECONNECT_INTERVAL_MS) {
       lastAutoReconnectAt = now;
-      for (const assignment of assignments.filter(shouldAutoRetryPaused)) {
+      for (const assignment of assignments.filter((candidate) =>
+        shouldAutoRetryPaused(
+          candidate,
+          candidate.assignment === 'transport' &&
+            database.getTransportRuntime(candidate.profile, candidate.fleetAddress).attemptAction !== undefined,
+        ),
+      )) {
         database.setAutomationEnabled(true, assignment.fleetAddress);
         database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'enabled', detail: 'Automatic reconnect after a plan-stage pause (nothing was submitted)' });
       }
