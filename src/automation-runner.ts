@@ -3,6 +3,7 @@ import { PLAN_STAGE_MARKER, PlannerStageError } from './c4.js';
 import { isPostSubmissionFailure } from './automatic-c4.js';
 
 const FAST_FOLLOW_AFTER_CONFIRM_MS = 2_500;
+const DEADLINE_RECHECK_DELAY_MS = 2_500;
 const MIN_REFRESH_INTERVAL_MS = 15_000;
 const MAX_CONTINUED_ACTIONS = 4;
 
@@ -20,13 +21,23 @@ export function shouldAutoRetryPaused(
 }
 
 /** After a confirmed action the runner should chain the next step almost
- * immediately (SLYA-style snappiness) instead of waiting for the full
- * configured refresh interval. Waiting/idle/paused/busy keep the configured
- * cadence with the same 15s floor the scheduler already enforces.
+ * immediately (SLYA-style snappiness). A wait with a known deadline wakes at
+ * that deadline; other outcomes keep the configured cadence with the same 15s
+ * floor the scheduler already enforces.
  */
-export function nextAutomationTickDelayMs(kind: AutomaticTickResult['kind'], refreshIntervalSeconds: number): number {
+export function nextAutomationTickDelayMs(
+  kind: AutomaticTickResult['kind'],
+  refreshIntervalSeconds: number,
+  untilUnixSeconds?: bigint,
+  nowUnixMilliseconds = Date.now(),
+): number {
   const refresh = Math.max(Math.trunc(refreshIntervalSeconds || 0), 15) * 1_000;
-  return kind === 'confirmed' ? FAST_FOLLOW_AFTER_CONFIRM_MS : Math.max(refresh, MIN_REFRESH_INTERVAL_MS);
+  if (kind === 'confirmed') return FAST_FOLLOW_AFTER_CONFIRM_MS;
+  if (kind === 'waiting' && untilUnixSeconds !== undefined) {
+    const remaining = untilUnixSeconds * 1_000n - BigInt(Math.trunc(nowUnixMilliseconds));
+    if (remaining < BigInt(refresh)) return Math.max(DEADLINE_RECHECK_DELAY_MS, Number(remaining));
+  }
+  return Math.max(refresh, MIN_REFRESH_INTERVAL_MS);
 }
 
 export type AutomaticStepOutcome = {
@@ -61,10 +72,13 @@ export class AutomaticCopperRunner {
   private running = false;
   private nextFleetIndex = 0;
   private prioritizedStops = new Map<string, string>();
+  private waitingUntil = new Map<string, bigint>();
+  private prioritizedWaits = new Map<string, bigint>();
 
   constructor(
     private readonly database: AepaDatabase,
     private readonly executeStep: (assignment: AutomationAssignmentRecord) => Promise<AutomaticStepOutcome>,
+    private readonly nowUnixSeconds: () => bigint = () => BigInt(Math.floor(Date.now() / 1_000)),
   ) {}
 
   async tick(): Promise<AutomaticTickResult> {
@@ -74,23 +88,47 @@ export class AutomaticCopperRunner {
     for (const address of this.prioritizedStops.keys()) {
       if (!runnable.some(candidate => candidate.fleetAddress === address && candidate.stopMode)) this.prioritizedStops.delete(address);
     }
+    for (const address of this.waitingUntil.keys()) {
+      if (!runnable.some(candidate => candidate.fleetAddress === address)) {
+        this.waitingUntil.delete(address);
+        this.prioritizedWaits.delete(address);
+      }
+    }
     const urgent = runnable.find(candidate => candidate.stopMode && this.prioritizedStops.get(candidate.fleetAddress) !== candidate.stopRequestedAt);
-    let assignment = urgent ?? runnable[this.nextFleetIndex % runnable.length]!;
+    const now = this.nowUnixSeconds();
+    const due = runnable
+      .filter(candidate => {
+        const until = this.waitingUntil.get(candidate.fleetAddress);
+        return until !== undefined && until <= now && this.prioritizedWaits.get(candidate.fleetAddress) !== until;
+      })
+      .sort((left, right) => {
+        const leftUntil = this.waitingUntil.get(left.fleetAddress)!;
+        const rightUntil = this.waitingUntil.get(right.fleetAddress)!;
+        return leftUntil < rightUntil ? -1 : leftUntil > rightUntil ? 1 : 0;
+      })[0];
+    let assignment = urgent ?? due ?? runnable[this.nextFleetIndex % runnable.length]!;
     if (urgent) this.prioritizedStops.set(urgent.fleetAddress, urgent.stopRequestedAt!);
-    else this.nextFleetIndex = (this.nextFleetIndex + 1) % runnable.length;
+    else if (!due) this.nextFleetIndex = (this.nextFleetIndex + 1) % runnable.length;
     this.running = true;
     try {
       let lastConfirmed: Extract<AutomaticTickResult, { kind: 'confirmed' }> | undefined;
       for (let continued = 0; continued < MAX_CONTINUED_ACTIONS; continued++) {
         const outcome = await this.executeStep(assignment);
         if (outcome.kind === 'waiting') {
+          this.waitingUntil.set(assignment.fleetAddress, outcome.untilUnixSeconds);
+          if (outcome.untilUnixSeconds <= this.nowUnixSeconds()) {
+            this.prioritizedWaits.set(assignment.fleetAddress, outcome.untilUnixSeconds);
+          }
           const marker = `waiting:${outcome.untilUnixSeconds.toString()}`;
           if (assignment.lastAction !== marker) {
             this.database.setAutomationLastAction(marker, assignment.fleetAddress);
-            this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action: assignment.assignment === 'scanning' ? 'scanning' : 'stop-mining', detail: outcome.detail });
+            const action = assignment.assignment === 'mining' ? 'stop-mining' : assignment.assignment;
+            this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'waiting', action, detail: outcome.detail });
           }
           return { kind: 'waiting', untilUnixSeconds: outcome.untilUnixSeconds };
         }
+        this.waitingUntil.delete(assignment.fleetAddress);
+        this.prioritizedWaits.delete(assignment.fleetAddress);
         if (outcome.kind === 'stopped') {
           this.database.completeAutomationStop(assignment.fleetAddress);
           this.database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', action: 'stop-automation', detail: outcome.detail });
@@ -119,6 +157,8 @@ export class AutomaticCopperRunner {
       }
       return lastConfirmed!;
     } catch (error) {
+      this.waitingUntil.delete(assignment.fleetAddress);
+      this.prioritizedWaits.delete(assignment.fleetAddress);
       const detail = String((error as Error)?.message ?? error);
       const planStage = error instanceof PlannerStageError ? `${PLAN_STAGE_MARKER} ` : '';
       const reason = `${planStage}${detail}. Automation paused; chain state must be inspected before any retry.`;

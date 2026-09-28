@@ -202,6 +202,11 @@ test('exposes a fast-follow delay after a confirmed action instead of the full r
   assert.equal(nextAutomationTickDelayMs('busy', 3), 15_000);
 });
 
+test('wakes at a known waiting deadline instead of the normal refresh cadence', () => {
+  assert.equal(nextAutomationTickDelayMs('waiting', 60, 1_005n, 1_000_000), 5_000);
+  assert.equal(nextAutomationTickDelayMs('waiting', 60, 999n, 1_000_000), 2_500);
+});
+
 test('persists a wait deadline without sending a transaction', async () => {
   const database = enabledDatabase();
   const runner = new AutomaticCopperRunner(database, async () => ({ kind: 'waiting', untilUnixSeconds: 2_000n, detail: 'Mining until target' }));
@@ -229,6 +234,37 @@ test('round-robins every enabled fleet assignment instead of starving later flee
   });
   await runner.tick(); await runner.tick(); await runner.tick();
   assert.deepEqual(visited, ['MF-02:Carbon', 'MF-03:Biomass', 'MF-04:Hydrogen']);
+  database.close();
+});
+
+test('prioritizes a fleet whose recorded wait deadline is due', async () => {
+  const database = new AepaDatabase(':memory:');
+  const base = {
+    profile: 'profile-1', assignment: 'transport' as const, homeSystemAddress: 'eternity', homeSystemId: 10,
+    homeSystemName: 'Eternity', resourceId: 0, resourceName: '', destinationAddress: 'sastri',
+    destinationName: 'Sastri', travelMode: 'warp' as const,
+  };
+  database.saveAutomationAssignments([
+    { ...base, fleetAddress: 'fleet-1', fleetName: 'FF-01' },
+    { ...base, fleetAddress: 'fleet-2', fleetName: 'FF-02' },
+    { ...base, fleetAddress: 'fleet-3', fleetName: 'FF-03' },
+  ]);
+  for (const fleet of ['fleet-1', 'fleet-2', 'fleet-3']) database.setAutomationEnabled(true, fleet);
+  let now = 1_000n;
+  const visited: string[] = [];
+  const runner = new AutomaticCopperRunner(database, async (assignment) => {
+    visited.push(assignment.fleetName);
+    return {
+      kind: 'waiting',
+      untilUnixSeconds: assignment.fleetName === 'FF-01' ? 1_005n : 2_000n,
+      detail: 'Warp arrival pending',
+    };
+  }, () => now);
+  await runner.tick();
+  await runner.tick();
+  now = 1_005n;
+  await runner.tick();
+  assert.deepEqual(visited, ['FF-01', 'FF-02', 'FF-01']);
   database.close();
 });
 
@@ -280,6 +316,15 @@ test('scanning wait activity is not labelled as stop-mining',async()=>{
   const runner=new AutomaticCopperRunner(database,async()=>({kind:'waiting',untilUnixSeconds:100n,detail:'Scan cooldown'}));
   await runner.tick();
   assert.equal(database.listAutomationActivity()[0].action,'scanning');
+  database.close();
+});
+
+test('transport wait activity is labelled as transport rather than stop-mining',async()=>{
+  const database=enabledDatabase();
+  database.db.prepare("UPDATE automation_assignment SET assignment='transport'").run();
+  const runner=new AutomaticCopperRunner(database,async()=>({kind:'waiting',untilUnixSeconds:100n,detail:'Transport arrival expected'}));
+  await runner.tick();
+  assert.equal(database.listAutomationActivity()[0].action,'transport');
   database.close();
 });
 

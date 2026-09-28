@@ -92,7 +92,11 @@ function scheduleAutomationTick(delayMs = 0): void {
     // SLYA-style snappiness: as soon as one action confirms, chain the next
     // step almost immediately instead of waiting the full refresh interval.
     const refreshSeconds = database.getSettings().refreshIntervalSeconds;
-    const normalDelay = nextAutomationTickDelayMs(result.kind, refreshSeconds);
+    const normalDelay = nextAutomationTickDelayMs(
+      result.kind,
+      refreshSeconds,
+      result.kind === 'waiting' ? result.untilUnixSeconds : undefined,
+    );
     const activeCount = database.listAutomationAssignments().filter((assignment) => assignment.enabled && assignment.status === 'running').length;
     const fairShareDelay = activeCount > 1 ? Math.max(2_500, Math.floor(refreshSeconds * 1_000 / activeCount)) : normalDelay;
     scheduleAutomationTick(Math.min(normalDelay, fairShareDelay));

@@ -152,6 +152,7 @@ test('automatic execution avoids a redundant Profile authority RPC read', async 
   const runnerBody = main.match(/automationRunner = new AutomaticCopperRunner[\s\S]*?\n  \}\);/)?.[0] ?? '';
   assert.doesNotMatch(runnerBody, /getActiveC4ProfileAuthority\(/);
   assert.match(runnerBody, /withStoredSigner\(/);
+  assert.match(main, /result\.kind === 'waiting' \? result\.untilUnixSeconds : undefined/);
 });
 
 test('travel mode precedes mining destination and same-system wording stays compact', async () => {
