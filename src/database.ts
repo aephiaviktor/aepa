@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { SavedAutomationAssignment } from './automation-assignment.js';
 import type { AutomationStopMode } from './automation-stop.js';
+import type { TransportPhase } from './transport-model.js';
 import { DEFAULT_SETTINGS, type AppSettings, validateSettings } from './settings.js';
 
 export interface FleetRecord {
@@ -73,6 +74,7 @@ export interface AutomationActivityRecord {
   detail: string;
   fleetAddress?: string;
   fleetName?: string;
+  repeatCount?: number;
 }
 
 export class AepaDatabase {
@@ -213,6 +215,23 @@ export class AepaDatabase {
     if (version < 8) {
       this.db.exec(`BEGIN; ALTER TABLE automation_assignment ADD COLUMN scanning_json TEXT;
         INSERT INTO schema_migrations(version, applied_at) VALUES (8, datetime('now')); COMMIT;`);
+    }
+    if (version < 9) {
+      this.db.exec(`BEGIN; ALTER TABLE automation_activity ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1 CHECK (repeat_count > 0);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (9, datetime('now')); COMMIT;`);
+    }
+    if (version < 10) {
+      this.db.exec(`BEGIN;
+        ALTER TABLE automation_assignment ADD COLUMN transport_json TEXT;
+        CREATE TABLE transport_runtime(profile TEXT NOT NULL, fleet TEXT NOT NULL, phase TEXT NOT NULL,
+          updated_at TEXT NOT NULL, PRIMARY KEY(profile,fleet));
+        INSERT INTO schema_migrations(version, applied_at) VALUES (10, datetime('now')); COMMIT;`);
+    }
+    if (version < 11) {
+      this.db.exec(`BEGIN;
+        ALTER TABLE transport_runtime ADD COLUMN attempt_action TEXT;
+        ALTER TABLE transport_runtime ADD COLUMN expected_json TEXT;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (11, datetime('now')); COMMIT;`);
     }
   }
 
@@ -434,6 +453,7 @@ export class AepaDatabase {
     try {
       for (const existing of current.values()) if (!selected.has(existing.fleetAddress)) {
         this.db.prepare('DELETE FROM scanning_runtime WHERE fleet = ?').run(existing.fleetAddress);
+        this.db.prepare('DELETE FROM transport_runtime WHERE fleet = ?').run(existing.fleetAddress);
         this.db.prepare('DELETE FROM automation_assignment WHERE fleet_address = ?').run(existing.fleetAddress);
       }
       for (const value of values) {
@@ -448,10 +468,12 @@ export class AepaDatabase {
           continue;
         }
         this.db.prepare('DELETE FROM scanning_runtime WHERE fleet = ?').run(value.fleetAddress);
+        this.db.prepare('DELETE FROM transport_runtime WHERE fleet = ?').run(value.fleetAddress);
         insert.run(value.profile, value.fleetAddress, value.fleetName, value.assignment, value.homeSystemAddress,
           value.homeSystemId, value.homeSystemName, value.resourceId, value.resourceName,
           value.destinationAddress, value.destinationName, value.travelMode, now);
-        this.db.prepare('UPDATE automation_assignment SET resource_ids_json = ?, scanning_json = ? WHERE fleet_address = ?').run(JSON.stringify(value.resourceIds ?? [value.resourceId]), scanningJson(value), value.fleetAddress);
+        this.db.prepare('UPDATE automation_assignment SET resource_ids_json = ?, scanning_json = ?, transport_json = ? WHERE fleet_address = ?')
+          .run(JSON.stringify(value.resourceIds ?? [value.resourceId]), scanningJson(value), transportJson(value), value.fleetAddress);
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -461,9 +483,9 @@ export class AepaDatabase {
     return this.listAutomationAssignments();
   }
 
-  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; scanningJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }): AutomationAssignmentRecord {
-    const { targetStopAtUnixSeconds, pendingJson, resourceIdsJson, scanningJson, stopMode, stopRequestedAt, ...rest } = row;
-    return { ...rest, ...(scanningJson == null ? {} : JSON.parse(scanningJson)), resourceIds: resourceIdsJson === null ? [row.resourceId] : JSON.parse(resourceIdsJson), enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }), ...(stopMode === null ? {} : { stopMode }), ...(stopRequestedAt === null ? {} : { stopRequestedAt }) };
+  private mapAutomationAssignment(row: Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; scanningJson: string | null; transportJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }): AutomationAssignmentRecord {
+    const { targetStopAtUnixSeconds, pendingJson, resourceIdsJson, scanningJson, transportJson, stopMode, stopRequestedAt, ...rest } = row;
+    return { ...rest, ...(scanningJson == null ? {} : JSON.parse(scanningJson)), ...(transportJson == null ? {} : JSON.parse(transportJson)), resourceIds: resourceIdsJson === null ? [row.resourceId] : JSON.parse(resourceIdsJson), enabled: row.enabled === 1, ...(targetStopAtUnixSeconds === null ? {} : { targetStopAtUnixSeconds: BigInt(targetStopAtUnixSeconds) }), ...(pendingJson === null ? {} : { pendingAssignment: JSON.parse(pendingJson) as SavedAutomationAssignment }), ...(stopMode === null ? {} : { stopMode }), ...(stopRequestedAt === null ? {} : { stopRequestedAt }) };
   }
 
   listAutomationAssignments(): AutomationAssignmentRecord[] {
@@ -475,10 +497,10 @@ export class AepaDatabase {
              travel_mode AS travelMode, enabled, status,
              target_stop_at_unix_seconds AS targetStopAtUnixSeconds,
              last_action AS lastAction, last_error AS lastError, updated_at AS updatedAt,
-             pending_json AS pendingJson, resource_ids_json AS resourceIdsJson, scanning_json AS scanningJson,
+             pending_json AS pendingJson, resource_ids_json AS resourceIdsJson, scanning_json AS scanningJson, transport_json AS transportJson,
              stop_mode AS stopMode, stop_requested_at AS stopRequestedAt
       FROM automation_assignment ORDER BY fleet_name COLLATE NOCASE, fleet_address
-    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; scanningJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }>;
+    `).all() as unknown as Array<Omit<AutomationAssignmentRecord, 'enabled' | 'targetStopAtUnixSeconds' | 'pendingAssignment' | 'stopMode' | 'stopRequestedAt'> & { enabled: number; targetStopAtUnixSeconds: string | null; pendingJson: string | null; resourceIdsJson: string | null; scanningJson: string | null; transportJson: string | null; stopMode: AutomationStopMode | null; stopRequestedAt: string | null }>;
     return rows.map((row) => this.mapAutomationAssignment(row));
   }
 
@@ -497,13 +519,14 @@ export class AepaDatabase {
       const result = this.db.prepare(`UPDATE automation_assignment SET
         profile=?, fleet_name=?, assignment=?, home_system_address=?, home_system_id=?, home_system_name=?,
         resource_id=?, resource_name=?, destination_address=?, destination_name=?, travel_mode=?,
-        resource_ids_json=?, scanning_json=?, pending_json=NULL, last_action=NULL, last_error=NULL, updated_at=? WHERE fleet_address=?`).run(
+        resource_ids_json=?, scanning_json=?, transport_json=?, pending_json=NULL, last_action=NULL, last_error=NULL, updated_at=? WHERE fleet_address=?`).run(
         value.profile, value.fleetName, value.assignment, value.homeSystemAddress, value.homeSystemId,
         value.homeSystemName, value.resourceId, value.resourceName, value.destinationAddress,
-        value.destinationName, value.travelMode, JSON.stringify(value.resourceIds ?? [value.resourceId]), scanningJson(value), new Date().toISOString(), fleetAddress,
+        value.destinationName, value.travelMode, JSON.stringify(value.resourceIds ?? [value.resourceId]), scanningJson(value), transportJson(value), new Date().toISOString(), fleetAddress,
       );
       if (result.changes !== 1) throw new Error('Automation assignment disappeared while applying its pending update');
       this.db.prepare('DELETE FROM scanning_runtime WHERE fleet = ?').run(fleetAddress);
+      this.db.prepare('DELETE FROM transport_runtime WHERE fleet = ?').run(fleetAddress);
       this.db.exec('RELEASE apply_pending_assignment');
     } catch(error) {
       this.db.exec('ROLLBACK TO apply_pending_assignment; RELEASE apply_pending_assignment');
@@ -519,6 +542,30 @@ export class AepaDatabase {
       .run(enabled ? 1 : 0, enabled ? 'running' : 'disabled', new Date().toISOString(), selected);
     if (result.changes !== 1) throw new Error('Save an Automation assignment before changing its state');
     return this.getAutomationAssignment(selected)!;
+  }
+
+  getTransportPhase(profile: string, fleet: string): TransportPhase {
+    const row = this.db.prepare('SELECT phase FROM transport_runtime WHERE profile = ? AND fleet = ?').get(profile, fleet) as { phase: TransportPhase } | undefined;
+    return row?.phase ?? 'load-outbound';
+  }
+
+  getTransportRuntime(profile:string,fleet:string):{phase:TransportPhase;attemptAction?:string;expected?:unknown}{
+    const row=this.db.prepare('SELECT phase,attempt_action AS attemptAction,expected_json AS expectedJson FROM transport_runtime WHERE profile=? AND fleet=?').get(profile,fleet) as {phase:TransportPhase;attemptAction:string|null;expectedJson:string|null}|undefined;
+    return row?{phase:row.phase,...(row.attemptAction===null?{}:{attemptAction:row.attemptAction}),...(row.expectedJson===null?{}:{expected:JSON.parse(row.expectedJson)})}:{phase:'load-outbound'};
+  }
+
+  setTransportAttempt(profile:string,fleet:string,phase:TransportPhase,action:string,expected:unknown):void{
+    this.db.prepare(`INSERT INTO transport_runtime(profile,fleet,phase,attempt_action,expected_json,updated_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(profile,fleet) DO UPDATE SET phase=excluded.phase,attempt_action=excluded.attempt_action,expected_json=excluded.expected_json,updated_at=excluded.updated_at`)
+      .run(profile,fleet,phase,action,JSON.stringify(expected),new Date().toISOString());
+  }
+
+  setTransportPhase(profile: string, fleet: string, phase: TransportPhase): void {
+    const allowed: readonly string[] = ['load-outbound','travel-outbound','service-target','travel-return','service-home','load-outbound-cargo','load-outbound-crew','undock-outbound','settle-outbound','dock-target','unload-outbound-cargo','unload-outbound-crew','load-return-cargo','load-return-crew','undock-return','settle-return','dock-home','unload-return-cargo','unload-return-crew','stop-unload-outbound-cargo','stop-unload-outbound-cargo-only','stop-unload-outbound-crew'];
+    if (!allowed.includes(phase)) throw new Error('Invalid Transport phase');
+    this.db.prepare(`INSERT INTO transport_runtime(profile,fleet,phase,attempt_action,expected_json,updated_at) VALUES(?,?,?,NULL,NULL,?)
+      ON CONFLICT(profile,fleet) DO UPDATE SET phase=excluded.phase,attempt_action=NULL,expected_json=NULL,updated_at=excluded.updated_at`)
+      .run(profile, fleet, phase, new Date().toISOString());
   }
 
   requestAutomationStop(mode: AutomationStopMode, fleetAddress: string): AutomationAssignmentRecord {
@@ -612,9 +659,24 @@ export class AepaDatabase {
     return { id: Number(result.lastInsertRowid), occurredAt, ...value };
   }
 
+  recordAutomationActivityCoalesced(value: Omit<AutomationActivityRecord, 'id' | 'occurredAt' | 'repeatCount'>, occurredAt = new Date().toISOString()): AutomationActivityRecord {
+    const detail = value.detail.slice(0, 4_000);
+    const latest = this.db.prepare(`SELECT id, detail, repeat_count AS repeatCount FROM automation_activity
+      WHERE kind = ? AND action IS ? AND fleet_address IS ? ORDER BY id DESC LIMIT 1`)
+      .get(value.kind, value.action ?? null, value.fleetAddress ?? null) as { id: number; detail: string; repeatCount: number } | undefined;
+    if (latest?.detail === detail) {
+      const repeatCount = latest.repeatCount + 1;
+      this.db.prepare('UPDATE automation_activity SET occurred_at = ?, repeat_count = ? WHERE id = ?').run(occurredAt, repeatCount, latest.id);
+      return { id: latest.id, occurredAt, ...value, repeatCount };
+    }
+    const result = this.db.prepare(`INSERT INTO automation_activity(occurred_at, kind, action, signature, detail, fleet_address, fleet_name, repeat_count) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`)
+      .run(occurredAt, value.kind, value.action ?? null, value.signature ?? null, detail, value.fleetAddress ?? null, value.fleetName ?? null);
+    return { id: Number(result.lastInsertRowid), occurredAt, ...value, repeatCount: 1 };
+  }
+
   listAutomationActivity(limit = 50): AutomationActivityRecord[] {
     const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 200);
-    return this.db.prepare(`SELECT id, occurred_at AS occurredAt, kind, action, signature, detail, fleet_address AS fleetAddress, fleet_name AS fleetName FROM automation_activity ORDER BY id DESC LIMIT ?`)
+    return this.db.prepare(`SELECT id, occurred_at AS occurredAt, kind, action, signature, detail, fleet_address AS fleetAddress, fleet_name AS fleetName, repeat_count AS repeatCount FROM automation_activity ORDER BY id DESC LIMIT ?`)
       .all(safeLimit) as unknown as AutomationActivityRecord[];
   }
 
@@ -629,6 +691,7 @@ export class AepaDatabase {
       DELETE FROM sync_state;
       DELETE FROM scanning_runtime;
       DELETE FROM scanning_receipts;
+      DELETE FROM transport_runtime;
       DELETE FROM automation_assignment;
       DELETE FROM automation_activity;
     `);
@@ -641,4 +704,10 @@ export class AepaDatabase {
 
 function scanningJson(value: SavedAutomationAssignment): string | null {
   return value.assignment === 'scanning' ? JSON.stringify({scanPatternId: value.scanPatternId, scanSectorX: value.scanSectorX, scanSectorY: value.scanSectorY}) : null;
+}
+
+function transportJson(value: SavedAutomationAssignment): string | null {
+  return value.assignment === 'transport'
+    ? JSON.stringify({ cargoOut:value.cargoOut ?? [], cargoBack:value.cargoBack ?? [], crewOut:value.crewOut ?? 0, crewBack:value.crewBack ?? 0 })
+    : null;
 }

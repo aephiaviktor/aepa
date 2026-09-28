@@ -22,6 +22,10 @@ export interface MiningAutomationCatalog {
     scanCost?: number;
     location: { x: number; y: number };
     travel: { fuelCapacityRaw: string; maxWarpDistance: number; subwarpFuelConsumptionRate: number; warpFuelConsumptionRate: number };
+    cargoCapacityRaw?: string;
+    requiredCrew?: number;
+    passengerCapacity?: number;
+    crewCount?: number;
   }[];
   homeStarbases: readonly {
     systemAddress: string;
@@ -37,6 +41,11 @@ export interface MiningAutomationCatalog {
   destinations: readonly MiningDestinationCandidate[];
   scanRegions?: readonly ScanningRegion[];
   scanPatterns?: readonly ScanningPatternOption[];
+  transportSystems?: readonly {
+    address: string; systemId: number; name: string; coordinates: { x: number; y: number }; connections: readonly number[];
+    registered: boolean; availableCrew: number;
+    cargo: readonly { cargoId: number; name: string; amountRaw: string; storageCostRaw: string }[];
+  }[];
   mode: 'configuration-preview';
 }
 
@@ -164,10 +173,23 @@ export async function loadMiningAutomationCatalog(settings: AppSettings): Promis
           subwarpFuelConsumptionRate: fleet.stats.movement.subwarpFuelConsumptionRate.value,
           warpFuelConsumptionRate: fleet.stats.movement.warpFuelConsumptionRate.value,
         },
+        cargoCapacityRaw: fleet.capacities.cargo.total.toString(),
+        requiredCrew: fleet.stats.misc.requiredCrew,
+        passengerCapacity: fleet.stats.misc.passengerCapacity,
+        crewCount: fleet.crewCount,
       })),
       homeStarbases,
       resources: resources.sort((left, right) => left.name.localeCompare(right.name)),
       destinations,
+      transportSystems: systems.filter(system => system.starbase?.owner === faction).map(system => {
+        const player = playerStarbases.find(starbase => String(starbase.system.address) === String(system.address));
+        return {
+          address:String(system.address), systemId:system.systemId, name:system.name, coordinates:system.coordinates,
+          connections:system.connections.map(connection=>connection.systemId), registered:!!player,
+          availableCrew:player?.availableCrew ?? 0,
+          cargo:(player?.cargo.items ?? []).filter(item=>item.quantityRaw>0n).map(item=>({cargoId:item.id,name:item.name,amountRaw:item.quantityRaw.toString(),storageCostRaw:item.storageCost.toString()})).sort((a,b)=>a.name.localeCompare(b.name)),
+        };
+      }),
       mode: 'configuration-preview',
     };
   } finally {

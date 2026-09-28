@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { MiningAutomationCatalog } from '../src/automation-catalog.js';
 import { AepaDatabase } from '../src/database.js';
-import { CatalogSyncCoordinator, CATALOG_TTL_MS } from '../src/catalog-sync.js';
+import { CatalogSyncCoordinator, CATALOG_TTL_MS, catalogForAssignmentSave } from '../src/catalog-sync.js';
 
 const scope = 'profile-1';
 assert.equal(CATALOG_TTL_MS, 3_600_000);
@@ -12,6 +12,7 @@ const catalog: MiningAutomationCatalog = {
   homeStarbases: [],
   resources: [],
   destinations: [],
+  transportSystems: [],
   mode: 'configuration-preview',
 };
 
@@ -84,4 +85,10 @@ test('a fresh legacy catalog without fleet travel data reloads before reaching t
   assert.equal(view.source, 'live');
   assert.equal(loads, 1);
   database.close();
+});
+
+test('assignment Save uses the exact rendered cache and remains disabled when refresh is unavailable',()=>{
+  const snapshot={catalog,sync:{dataset:'catalog' as const,scope,status:'error' as const,lastSucceededAt:'revision-1',lastError:'RPC timeout'}};
+  assert.deepEqual(catalogForAssignmentSave(snapshot,'revision-1'),{value:catalog,canEnable:false,networkError:'RPC timeout'});
+  assert.throws(()=>catalogForAssignmentSave(snapshot,'revision-0'),/changed after this form/i);
 });

@@ -232,3 +232,33 @@ test('legacy single-resource records expose a singleton resource set', () => {
   assert.deepEqual(db.getAutomationAssignment()?.resourceIds, [311]);
   db.close();
 });
+
+test('identical save failures coalesce with retry count and latest occurrence time', () => {
+  const db = new AepaDatabase(':memory:');
+  db.recordAutomationActivityCoalesced({ kind: 'disabled', action: 'save-assignment', detail: 'Save blocked — RPC unavailable' }, '2026-09-28T07:00:00.000Z');
+  db.recordAutomationActivityCoalesced({ kind: 'disabled', action: 'save-assignment', detail: 'Save blocked — RPC unavailable' }, '2026-09-28T07:01:00.000Z');
+  const [activity] = db.listAutomationActivity();
+  assert.equal(activity?.repeatCount, 2);
+  assert.equal(activity?.occurredAt, '2026-09-28T07:01:00.000Z');
+  assert.equal(db.listAutomationActivity().length, 1);
+  db.close();
+});
+
+test('transport assignment and durable phase survive SQLite reload semantics', () => {
+  const db = new AepaDatabase(':memory:');
+  db.saveAutomationAssignment({ profile:'p',fleetAddress:'f',fleetName:'F',assignment:'transport',homeSystemAddress:'h',homeSystemId:1,homeSystemName:'Home',resourceId:0,resourceIds:[],resourceName:'Transport',destinationAddress:'t',destinationName:'Target',travelMode:'subwarp',cargoOut:[{cargoId:10,amountRaw:'5'}],cargoBack:[{cargoId:11,amountRaw:'2'}],crewOut:3,crewBack:1 });
+  db.setTransportPhase('p','f','travel-outbound');
+  assert.equal(db.getAutomationAssignment('f')?.assignment, 'transport');
+  assert.deepEqual(db.getAutomationAssignment('f')?.cargoOut, [{cargoId:10,amountRaw:'5'}]);
+  assert.equal(db.getTransportPhase('p','f'), 'travel-outbound');
+  db.close();
+});
+
+test('Transport persists a pre-send expectation and clears it with the confirmed next phase',()=>{
+  const db=new AepaDatabase(':memory:');
+  db.setTransportAttempt('p','f','load-outbound-cargo','load-outbound-cargo',{cargo:{10:'5'}});
+  assert.deepEqual(db.getTransportRuntime('p','f'),{phase:'load-outbound-cargo',attemptAction:'load-outbound-cargo',expected:{cargo:{10:'5'}}});
+  db.setTransportPhase('p','f','load-outbound-crew');
+  assert.deepEqual(db.getTransportRuntime('p','f'),{phase:'load-outbound-crew'});
+  db.close();
+});

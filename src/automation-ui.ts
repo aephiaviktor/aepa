@@ -8,6 +8,10 @@ export interface AutomationDraftShape {
   scanPatternId?: number;
   scanSectorX?: number;
   scanSectorY?: number;
+  cargoOut?: readonly {cargoId:number;amountRaw:string}[];
+  cargoBack?: readonly {cargoId:number;amountRaw:string}[];
+  crewOut?: number;
+  crewBack?: number;
 }
 
 function canonicalDrafts(values: readonly AutomationDraftShape[]): string {
@@ -19,6 +23,7 @@ function canonicalDrafts(values: readonly AutomationDraftShape[]): string {
     resourceIds: [...(value.assignment === 'scanning' ? [] : value.resourceIds)].sort((a, b) => a - b),
     travelMode: value.travelMode,
     ...(value.assignment === 'scanning' ? {scanPatternId: value.scanPatternId, scanSectorX: value.scanSectorX, scanSectorY: value.scanSectorY} : {}),
+    ...(value.assignment === 'transport' ? {cargoOut:value.cargoOut ?? [],cargoBack:value.cargoBack ?? [],crewOut:value.crewOut ?? 0,crewBack:value.crewBack ?? 0} : {}),
   })).sort((a, b) => a.fleetAddress.localeCompare(b.fleetAddress)));
 }
 

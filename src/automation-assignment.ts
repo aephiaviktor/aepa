@@ -4,6 +4,7 @@ import { validateScanSector } from './scanning-model.js';
 import type { MiningAutomationCatalog } from './automation-catalog.js';
 import { isRoundTripReachable, type TravelMode } from './automation-options.js';
 import { assertMiningResourcesAvailable } from './mining-research.js';
+import { projectedReturnAvailability, rankTransportTargets, validateTransportQuantities, type TransportCargoAmount } from './transport-model.js';
 
 export interface AutomationAssignmentInput {
   fleetAddress: string;
@@ -16,13 +17,17 @@ export interface AutomationAssignmentInput {
   scanPatternId?: number;
   scanSectorX?: number;
   scanSectorY?: number;
+  cargoOut?: TransportCargoAmount[];
+  cargoBack?: TransportCargoAmount[];
+  crewOut?: number;
+  crewBack?: number;
 }
 
 export interface SavedAutomationAssignment {
   profile: string;
   fleetAddress: string;
   fleetName: string;
-  assignment: 'mining' | 'scanning';
+  assignment: 'mining' | 'scanning' | 'transport';
   homeSystemAddress: string;
   homeSystemId: number;
   homeSystemName: string;
@@ -35,6 +40,10 @@ export interface SavedAutomationAssignment {
   scanSectorX?: number;
   scanSectorY?: number;
   travelMode: 'auto' | 'same-system' | 'subwarp' | 'warp' | 'warp-lane';
+  cargoOut?: TransportCargoAmount[];
+  cargoBack?: TransportCargoAmount[];
+  crewOut?: number;
+  crewBack?: number;
 }
 
 interface AutomationRuntimeGate {
@@ -65,9 +74,34 @@ export function validateSupportedAutomationAssignment(value: unknown, catalog: M
   const input = value as Partial<AutomationAssignmentInput>;
   const fleet = catalog.fleets.find((candidate) => candidate.address === input.fleetAddress);
   if (!fleet) throw new Error('Select a fleet from the current C4 catalog');
-  if (input.assignment !== 'mining' && input.assignment !== 'scanning') throw new Error('Select Mining or Scanning');
+  if (input.assignment !== 'mining' && input.assignment !== 'scanning' && input.assignment !== 'transport') throw new Error('Select Mining, Scanning, or Transport');
   const home = catalog.homeStarbases.find((candidate) => candidate.systemAddress === input.homeSystemAddress);
   if (!home) throw new Error('Select a Home Starbase in the configured faction');
+  if (input.assignment === 'transport') {
+    if (input.travelMode !== 'subwarp' && input.travelMode !== 'warp-lane') throw new Error('Transport supports Subwarp or Warp lane only');
+    const systems = catalog.transportSystems ?? [];
+    const homeSystem = systems.find(candidate => candidate.address === home.systemAddress);
+    if (!homeSystem) throw new Error('Home Starbase transport inventory is unavailable');
+    const target = rankTransportTargets({ home: homeSystem, systems, fleet: fleet.travel, travelMode: input.travelMode })
+      .find(candidate => candidate.address === input.destinationAddress);
+    if (!target) throw new Error('Select a reachable Transport target with a valid round trip');
+    const cargoOut = input.cargoOut ?? [];
+    const cargoBack = input.cargoBack ?? [];
+    const storageCostByCargoId = new Map(systems.flatMap(system => system.cargo).map(item => [item.cargoId, BigInt(item.storageCostRaw)]));
+    validateTransportQuantities({ requested:cargoOut, available:homeSystem.cargo, storageCostByCargoId, remainingStorageRaw:BigInt(fleet.cargoCapacityRaw ?? '0') });
+    const projected = projectedReturnAvailability(target.cargo,cargoOut).map(item=>({cargoId:item.cargoId,amountRaw:item.projectedRaw}));
+    validateTransportQuantities({ requested:cargoBack, available:projected, storageCostByCargoId, remainingStorageRaw:BigInt(fleet.cargoCapacityRaw ?? '0') });
+    const crewOut=input.crewOut ?? 0, crewBack=input.crewBack ?? 0;
+    if (![crewOut,crewBack].every(amount=>Number.isSafeInteger(amount)&&amount>=0&&amount<=65_535)) throw new Error('Crew amounts must be whole unsigned u16 values');
+    const passengerCapacity=fleet.passengerCapacity ?? 0;
+    if((fleet.crewCount??0)<(fleet.requiredCrew??0))throw new Error(`Fleet requires ${fleet.requiredCrew??0} operating crew before Transport can start`);
+    if (crewOut>passengerCapacity || crewBack>passengerCapacity) throw new Error(`Fleet passenger capacity is ${passengerCapacity}`);
+    if (crewOut>homeSystem.availableCrew) throw new Error(`Home Starbase has only ${homeSystem.availableCrew} crew available`);
+    if (crewBack>target.availableCrew+crewOut) throw new Error(`Target Starbase projected available crew is ${target.availableCrew+crewOut}`);
+    if (!cargoOut.length&&!cargoBack.length&&crewOut===0&&crewBack===0) throw new Error('Transport must move cargo or crew');
+    return {profile,fleetAddress:fleet.address,fleetName:fleet.name,assignment:'transport',homeSystemAddress:home.systemAddress,homeSystemId:home.systemId,homeSystemName:home.systemName,
+      resourceId:0,resourceIds:[],resourceName:'Transport',destinationAddress:target.address,destinationName:target.name,travelMode:input.travelMode,cargoOut,cargoBack,crewOut,crewBack};
+  }
   if (input.assignment === 'scanning') {
     const sector = validateScanSector(input.scanSectorX, input.scanSectorY);
     const region = scanSectorRegion(catalog.scanRegions ?? [], sector.x, sector.y);

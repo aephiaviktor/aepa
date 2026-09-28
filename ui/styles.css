@@ -175,6 +175,12 @@ input:disabled, select:disabled { opacity: .58; }
 .resource-options p { color: #ffc472; }
 .resource-options label.locked { color: #617985; cursor: not-allowed; }
 .resource-options label.locked::after { content: 'Locked'; margin-left: auto; color: #bd8f5a; font-size: 8px; text-transform: uppercase; }
+.transport-cargo-picker { position:relative; min-width:0; font-size:10px; }
+.transport-cargo-picker summary { cursor:pointer; padding:8px 7px; border:1px solid #24516b; border-radius:4px; background:#061d2b; }
+.transport-cargo-options { position:absolute; top:100%; right:0; z-index:30; display:grid; gap:6px; padding:8px; min-width:300px; max-height:300px; overflow-y:auto; background:#061d2b; border:1px solid #24516b; box-shadow:0 6px 18px #000a; }
+.transport-cargo-options label { display:grid; grid-template-columns:auto 1fr 90px; align-items:center; gap:8px; }
+.transport-cargo-options input[type="number"] { min-width:0; width:90px; }
+.automation-fleet-row.transport .compact-field-grid { grid-template-columns:repeat(9,minmax(110px,1fr)) auto; }
 .activity-page-list { max-height: calc(100vh - 150px); padding: 0; }
 .warning-dialog { width: min(520px, calc(100vw - 40px)); border: 1px solid #8c6e3c; border-radius: 10px; padding: 22px; background: #081923; color: var(--text); box-shadow: 0 20px 70px #000c; }
 .warning-dialog::backdrop { background: #010712c9; backdrop-filter: blur(4px); }

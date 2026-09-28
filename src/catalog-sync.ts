@@ -1,5 +1,5 @@
 import { loadMiningAutomationCatalog, type MiningAutomationCatalog } from './automation-catalog.js';
-import type { AepaDatabase } from './database.js';
+import type { AepaDatabase, CatalogSnapshot } from './database.js';
 import { SyncCoordinator, type SyncCoordinatorOptions } from './sync.js';
 
 export const CATALOG_TTL_MS = 60 * 60_000; // 1h: measured cold live load is ~67s; world data (regions/systems/belts/resources) changes slowly
@@ -21,13 +21,23 @@ export interface CatalogSyncCoordinatorOptions {
 
 function hasCurrentFleetTravelData(catalog: unknown): catalog is MiningAutomationCatalog {
   if (!catalog || typeof catalog !== 'object' || !Array.isArray((catalog as MiningAutomationCatalog).fleets)) return false;
-  return (catalog as MiningAutomationCatalog).fleets.every((fleet) =>
+  return Array.isArray((catalog as MiningAutomationCatalog).transportSystems) && (catalog as MiningAutomationCatalog).fleets.every((fleet) =>
     Number.isFinite(fleet.location?.x)
     && Number.isFinite(fleet.location?.y)
     && typeof fleet.travel?.fuelCapacityRaw === 'string'
     && Number.isFinite(fleet.travel?.maxWarpDistance)
     && Number.isFinite(fleet.travel?.subwarpFuelConsumptionRate)
-    && Number.isFinite(fleet.travel?.warpFuelConsumptionRate));
+    && Number.isFinite(fleet.travel?.warpFuelConsumptionRate)
+    && typeof fleet.cargoCapacityRaw === 'string'
+    && Number.isSafeInteger(fleet.requiredCrew)
+    && Number.isSafeInteger(fleet.passengerCapacity)
+    && Number.isSafeInteger(fleet.crewCount));
+}
+
+export function catalogForAssignmentSave(snapshot:CatalogSnapshot,revision:unknown):{value:MiningAutomationCatalog;canEnable:boolean;networkError?:string}{
+  if(!snapshot.catalog||!hasCurrentFleetTravelData(snapshot.catalog))throw new Error('No cached Automation catalog is available; wait for the first successful C4 catalog sync');
+  if(typeof revision!=='string'||revision!==snapshot.sync.lastSucceededAt)throw new Error('The Automation catalog changed after this form was loaded; reload the form before saving');
+  return{value:snapshot.catalog,canEnable:snapshot.sync.status==='ready',...(snapshot.sync.lastError?{networkError:snapshot.sync.lastError}:{})};
 }
 
 export class CatalogSyncCoordinator extends SyncCoordinator<MiningAutomationCatalog> {

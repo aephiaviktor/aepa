@@ -1,6 +1,7 @@
 import { scanCargoCosts, scanSectorRegion } from '../dist/src/scanning-model.js';
 import { formatHomeStarbaseOption, isRoundTripReachable, rankMiningDestinations } from '../dist/src/automation-options.js';
 import { automationDraftsEqual, formatMiningProgress } from '../dist/src/automation-ui.js';
+import { refreshTransportEditor } from './transport-editor.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
 import { formatLocalHhmm } from '../dist/src/copper-estimate.js';
 
@@ -11,6 +12,7 @@ let settings;
 let signerStatus;
 let loadedFleets = [];
 let automationCatalog;
+let automationCatalogRevision;
 let automationCatalogLoad;
 let automationRuntime;
 let lastFleetSnapshotKey;
@@ -192,9 +194,10 @@ async function ensureAutomationCatalog(force = false) {
   if (automationCatalogLoad) return automationCatalogLoad;
   if (automationCatalog && !force) return automationCatalog;
   $('automation-empty').textContent = "Reconnecting… loading from cache or C4…";
-  automationCatalogLoad = window.aepa.loadAutomationCatalog().then((catalog) => {
-    renderAutomationCatalog(catalog);
-    return catalog;
+  automationCatalogLoad = window.aepa.loadAutomationCatalog().then((result) => {
+    automationCatalogRevision=result.revision;
+    renderAutomationCatalog(result.catalog);
+    return result.catalog;
   }).catch((error) => {
     $('automation-empty').textContent = friendlySyncError(error?.message || error);
     throw error;
@@ -257,8 +260,8 @@ function savedDrafts() {
   const assignments = automationRuntime?.assignments ?? (automationRuntime?.assignment ? [automationRuntime.assignment] : []);
   return assignments.map((record) => {
     const value = record.pendingAssignment || record;
-    const { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY } = value;
-    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds: resourceIds ?? [resourceId], destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY };
+    const { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds, destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY, cargoOut, cargoBack, crewOut, crewBack } = value;
+    return { fleetAddress, assignment, homeSystemAddress, resourceId, resourceIds: resourceIds ?? [resourceId], destinationAddress, travelMode, scanPatternId, scanSectorX, scanSectorY, cargoOut, cargoBack, crewOut, crewBack };
   });
 }
 
@@ -346,6 +349,9 @@ function replaceSelectOptions(select, options, preferredValue) {
 }
 
 function readAutomationRow(row) {
+  const readCargo = (name) => [...row.querySelectorAll(`[data-cargo-direction="${name}"] input[type="checkbox"]:checked`)].map(checkbox => ({
+    cargoId:Number(checkbox.dataset.cargoId), amountRaw:checkbox.closest('label').querySelector('input[type="number"]').value,
+  })).filter(value=>value.amountRaw !== '').sort((a,b)=>a.cargoId-b.cargoId);
   return {
     fleetAddress: row.querySelector('[data-field="fleet"]').value,
     assignment: row.querySelector('[data-field="assignment"]').value,
@@ -356,6 +362,10 @@ function readAutomationRow(row) {
     scanPatternId: row.querySelector('[data-field="scan-pattern"]').value === '' ? undefined : Number(row.querySelector('[data-field="scan-pattern"]').value),
     scanSectorX: row.querySelector('[data-field="scan-x"]').valueAsNumber,
     scanSectorY: row.querySelector('[data-field="scan-y"]').valueAsNumber,
+    cargoOut:readCargo('out'),
+    cargoBack:readCargo('back'),
+    crewOut:row.querySelector('[data-field="crew-out"]').valueAsNumber || 0,
+    crewBack:row.querySelector('[data-field="crew-back"]').valueAsNumber || 0,
   };
 }
 
@@ -416,15 +426,22 @@ function updateResourceCounter(row) {
   }
 }
 
+function refreshTransportRow(row, draft, preferredDestination) {
+  refreshTransportEditor({row,draft,preferredDestination,catalog:automationCatalog,replaceSelectOptions,onChanged:()=>{writeAutomationDrafts();updateAssignmentControls();}});
+}
+
 function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   const draft = readAutomationRow(row);
   const scanning = draft.assignment === 'scanning';
+  const transport = draft.assignment === 'transport';
   row.classList.toggle('scanning',scanning);
-  const headings = scanning ? ['Fleet','Assignment','Home Starbase','Scan Sector X','Scan Sector Y','Scan Pattern','Travel Mode','Actions'] : ['Fleet','Assignment','Home Starbase','Travel','Mining Destination','Resources','Actions'];
+  row.classList.toggle('transport',transport);
+  const headings = scanning ? ['Fleet','Assignment','Home Starbase','Scan Sector X','Scan Sector Y','Scan Pattern','Travel Mode','Actions'] : transport ? ['Fleet','Assignment','Home Starbase','Travel','Target','Cargo','Cargo back','Crew','Crew back','Actions'] : ['Fleet','Assignment','Home Starbase','Travel','Mining Destination','Resources','Actions'];
   row.querySelector('.row-assignment-columns').replaceChildren(...headings.map(title => { const span=document.createElement('span');span.textContent=title;return span; }));
   row.querySelector('[data-field="destination"]').hidden = scanning;
-  row.querySelector('.resource-picker').hidden = scanning;
+  row.querySelector('.resource-picker').hidden = scanning || transport;
   for (const field of row.querySelectorAll('.scanning-field')) field.hidden = !scanning;
+  for (const field of row.querySelectorAll('.transport-field')) field.hidden = !transport;
   const mode = row.querySelector('[data-field="travel"]');
   if (scanning) {
     const grid = row.querySelector('.field-grid');
@@ -441,6 +458,12 @@ function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
     return;
   }
   row.querySelector('.field-grid').insertBefore(mode,row.querySelector('[data-field="destination"]'));
+  if (transport) {
+    replaceSelectOptions(mode,[{value:'subwarp',label:'Subwarp'},{value:'warp-lane',label:'Warp lane'}],preferredTravelMode ?? draft.travelMode ?? 'subwarp');
+    draft.travelMode=mode.value;
+    refreshTransportRow(row,draft,preferredDestination);
+    writeAutomationDrafts(); updateAssignmentControls(); return;
+  }
   replaceSelectOptions(mode, [{value:'auto',label:'Same system'}, {value:'subwarp',label:'Subwarp'}, {value:'warp',label:'Warp'}, {value:'warp-lane',label:'Warp lane'}], preferredTravelMode ?? draft.travelMode);
   const home = automationCatalog.homeStarbases.find((candidate) => candidate.systemAddress === draft.homeSystemAddress);
   const travel = row.querySelector('[data-field="travel"]');
@@ -484,11 +507,15 @@ function createAutomationRow(draft = {}) {
   row.className = 'automation-fleet-row';
   row.innerHTML = `<div class="assignment-columns compact-field-grid row-assignment-columns" aria-hidden="true" hidden></div><div class="field-grid compact-field-grid">
     <select data-field="fleet" aria-label="Fleet"></select>
-    <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option><option value="scanning">Scanning</option></select>
+    <select data-field="assignment" aria-label="Assignment"><option value="mining">Mining</option><option value="scanning">Scanning</option><option value="transport">Transport</option></select>
     <select data-field="home" aria-label="Home Starbase"></select>
     <select data-field="travel" aria-label="Travel"><option value="auto">Same system</option><option value="subwarp">Subwarp</option><option value="warp">Warp</option><option value="warp-lane">Warp lane</option></select>
     <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
     <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources · 0/8</summary><div class="resource-options"></div></details>
+    <details class="transport-field transport-cargo-picker" data-cargo-direction="out" hidden><summary>Cargo</summary><div class="transport-cargo-options"></div></details>
+    <details class="transport-field transport-cargo-picker" data-cargo-direction="back" hidden><summary>Cargo back</summary><div class="transport-cargo-options"></div></details>
+    <label class="transport-field" hidden><input data-field="crew-out" aria-label="Crew" type="number" min="0" max="65535" step="1" value="0"></label>
+    <label class="transport-field" hidden><input data-field="crew-back" aria-label="Crew back" type="number" min="0" max="65535" step="1" value="0"></label>
     <select class="scanning-field" data-field="scan-pattern" aria-label="Scan Pattern" hidden></select>
     <label class="scanning-field" hidden><input data-field="scan-x" aria-label="Scan Sector X" type="number" min="-128" max="127" step="1" required></label>
     <label class="scanning-field" hidden><input data-field="scan-y" aria-label="Scan Sector Y" type="number" min="-128" max="127" step="1" required></label>
@@ -506,8 +533,15 @@ function createAutomationRow(draft = {}) {
   row.querySelector('[data-field="scan-x"]').value = draft.scanSectorX ?? '';
   row.querySelector('[data-field="scan-y"]').value = draft.scanSectorY ?? '';
   row.initialPatternId = draft.scanPatternId;
+  row.initialCargoOut = draft.cargoOut ?? [];
+  row.initialCargoBack = draft.cargoBack ?? [];
+  row.querySelector('[data-field="crew-out"]').value=draft.crewOut ?? 0;
+  row.querySelector('[data-field="crew-back"]').value=draft.crewBack ?? 0;
   for (const input of row.querySelectorAll('input[type="number"]')) input.addEventListener('input', () => {
-    refreshScanningRow(row, readAutomationRow(row)); writeAutomationDrafts(); updateAssignmentControls();
+    const current=readAutomationRow(row);
+    if(current.assignment==='scanning') refreshScanningRow(row,current);
+    if(current.assignment==='transport') refreshTransportRow(row,current,row.querySelector('[data-field="destination"]').value);
+    writeAutomationDrafts(); updateAssignmentControls();
   });
   for (const select of row.querySelectorAll('select')) select.addEventListener('change', () => {
     if (select.dataset.field === 'fleet') renderAutomationRows(writeAutomationDrafts());
@@ -572,7 +606,7 @@ function renderActivityEntries(host, entries) {
     name.textContent = entry.fleetName || 'System';
     const detail = document.createElement('span');
     const time = entry.occurredAt ? new Date(entry.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
-    detail.textContent = `${time} · ${entry.action || entry.kind} · ${entry.detail}`;
+    detail.textContent = `${time} · ${entry.action || entry.kind}${entry.repeatCount > 1 ? ` · repeated ${entry.repeatCount} times` : ''} · ${entry.detail}`;
     item.append(name, detail);
     return item;
   }));
@@ -671,9 +705,9 @@ function updateAssignmentControls() {
   const assignments = automationRuntime?.assignments ?? [];
   const rows = [...document.querySelectorAll('.automation-fleet-row')];
   const drafts = rows.map(readAutomationRow);
-  const hasScanning = drafts.some(draft => draft.assignment === 'scanning');
-  document.querySelector('#automation-config > .assignment-columns').hidden = hasScanning;
-  for (const row of rows) row.querySelector('.row-assignment-columns').hidden = !hasScanning;
+  const hasVariableLayout = drafts.some(draft => draft.assignment !== 'mining');
+  document.querySelector('#automation-config > .assignment-columns').hidden = hasVariableLayout;
+  for (const row of rows) row.querySelector('.row-assignment-columns').hidden = !hasVariableLayout;
   const canSave = rows.length > 0 && rows.every((row) => {
     if (row.querySelector('[data-field="assignment"]').value === 'scanning') {
       const draft = readAutomationRow(row);
@@ -682,6 +716,15 @@ function updateAssignmentControls() {
         const input = row.querySelector(`[data-field="${field}"]`);
         return input.value !== '' && input.checkValidity();
       });
+    }
+    if (row.querySelector('[data-field="assignment"]').value === 'transport') {
+      const draft=readAutomationRow(row);
+      const cargo=[...draft.cargoOut,...draft.cargoBack];
+      const crew=[row.querySelector('[data-field="crew-out"]'),row.querySelector('[data-field="crew-back"]')];
+      return !!draft.destinationAddress && ['subwarp','warp-lane'].includes(draft.travelMode)
+        && cargo.every(value=>/^[1-9]\d*$/.test(value.amountRaw))
+        && crew.every(input=>input.checkValidity())
+        && (cargo.length>0 || draft.crewOut>0 || draft.crewBack>0);
     }
     const checked = [...row.querySelectorAll('[data-resource-id]:checked')];
     return row.querySelector('[data-field="destination"]').value && checked.length > 0 && checked.every(input => input.dataset.available !== 'false');
@@ -832,16 +875,12 @@ async function saveAutomationChanges() {
   button.disabled = true;
   try {
     const drafts = writeAutomationDrafts();
-    const state = await window.aepa.saveAutomationAssignment(drafts);
+    const state = await window.aepa.saveAutomationAssignment(drafts,automationCatalogRevision);
     renderAutomationState(state);
     renderAutomationRows(savedDrafts());
     return true;
   } catch (error) {
     try { renderAutomationState(await window.aepa.getAutomationState()); } catch {}
-    const item = document.createElement('div');
-    item.className = 'automation-issue error';
-    item.textContent = `Save blocked — ${error.message || String(error)}`;
-    $('automation-issue-list').prepend(item);
     return false;
   } finally {
     updateAssignmentControls();

@@ -1,4 +1,5 @@
 import { executeNextScanningStepOnce, inspectScanningStep, SCANNING_WARP_UNAVAILABLE } from '../src/scanning-c4.js';
+import { executeNextTransportStepOnce } from '../src/transport-c4.js';
 import { scanningPhase } from '../src/scanning-store.js';
 import { shouldEnableSavedAssignment } from '../src/automation-stop.js';
 import { recoverPausedOperation } from '../src/operator-recovery.js';
@@ -15,7 +16,7 @@ import { executeNextCopperStepOnce } from '../src/automatic-c4.js';
 import { getActiveC4ProfileAuthority, inspectNextCopperStep, loadC4Fleets, simulateNextCopperStepSigned, type MiningLoopScope } from '../src/c4.js';
 import { AepaDatabase } from '../src/database.js';
 import { FleetSyncCoordinator } from '../src/fleet-sync.js';
-import { CatalogSyncCoordinator } from '../src/catalog-sync.js';
+import { CatalogSyncCoordinator, catalogForAssignmentSave } from '../src/catalog-sync.js';
 import { isPostSubmissionFailure } from '../src/automatic-c4.js';
 import { C4_NETWORK } from '../src/network.js';
 import { getAtlasKitVersionStatus } from '../src/atlas-kit-version.js';
@@ -187,6 +188,14 @@ app.whenReady().then(() => {
         }
         return outcome;
       }
+      if (effective.assignment === 'transport') {
+        const outcome=await executeNextTransportStepOnce(settings,secretKey,effective,database);
+        if(outcome.kind==='stopped'&&effective.pendingAssignment&&!effective.stopMode){
+          database.applyPendingAutomationAssignment(effective.fleetAddress);
+          return{kind:'waiting',untilUnixSeconds:BigInt(Math.floor(Date.now()/1000)),detail:'Pending Transport assignment activated at Home Starbase'};
+        }
+        return outcome;
+      }
       return executeNextCopperStepOnce(settings, secretKey, effective.targetStopAtUnixSeconds, (stage, details) => {
         if (stage === 'automatic-action-selected' && details?.action === 'start-mining' && details.targetStopAtUnixSeconds) {
           database.setAutomationTargetStop(BigInt(details.targetStopAtUnixSeconds), effective.fleetAddress);
@@ -226,12 +235,17 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('fleets:snapshot', () => database.getFleetSnapshot(database.getSettings().playerProfile));
   ipcMain.handle('c4:connect', () => fleetSync.refresh());
-  ipcMain.handle('automation:catalog', async () => (await catalogSync.resolve()).value);
+  ipcMain.handle('automation:catalog', async () => {
+    const resolved=await catalogSync.resolve();
+    return{catalog:resolved.value,revision:database.getCatalogSnapshot(database.getSettings().playerProfile).sync.lastSucceededAt};
+  });
   ipcMain.handle('automation:state', () => automationState());
-  ipcMain.handle('automation:save', async (_event, value) => {
+  ipcMain.handle('automation:save', async (_event, value, catalogRevision) => {
     try {
       const settings = database.getSettings();
-      const catalog = await loadMiningAutomationCatalog(settings);
+      const catalogSnapshot = database.getCatalogSnapshot(settings.playerProfile);
+      const saveCatalog=catalogForAssignmentSave(catalogSnapshot,catalogRevision);
+      const catalog = saveCatalog.value;
       if (!Array.isArray(value) || value.length === 0) throw new Error('Save at least one fleet assignment');
       const validated = value.map((draft) => validateSupportedAutomationAssignment(draft, catalog, settings.playerProfile));
       const previous = database.listAutomationAssignments();
@@ -258,6 +272,7 @@ app.whenReady().then(() => {
       // Updates to a running fleet stay pending until its current cycle has
       // stopped, docked, unloaded, and refilled safely.
       try {
+        if (!saveCatalog.canEnable) throw new Error(`C4 catalog refresh is unavailable; assignment is saved disabled and awaiting network${saveCatalog.networkError ? `: ${saveCatalog.networkError}` : ''}`);
         const signer = await getAuthorizedSignerStatus(signerPath);
         if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
         for (const assignment of assignments) {
@@ -288,7 +303,7 @@ app.whenReady().then(() => {
       return automationState();
     } catch (error) {
       const detail = `Save blocked — ${String((error as Error)?.message ?? error)}`;
-      database.recordAutomationActivity({ kind: 'disabled', detail });
+      database.recordAutomationActivityCoalesced({ kind: 'disabled', action: 'save-assignment', detail });
       throw error;
     }
   });

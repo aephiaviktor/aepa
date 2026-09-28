@@ -133,6 +133,20 @@ test('destination precedes checkbox resource picker with eight-resource counter'
   assert.ok(source.indexOf('aria-label="Mining Destination"') < source.indexOf('aria-label="Resources"'));
 });
 
+test('Transport editor exposes target, cargo, return cargo, and crew controls', async () => {
+  const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
+  assert.match(source, /value="transport">Transport/);
+  assert.match(source, /data-cargo-direction="out"/);
+  assert.match(source, /data-cargo-direction="back"/);
+  assert.match(source, /data-field="crew-out"/);
+  assert.match(source, /data-field="crew-back"/);
+  const editor = await readFile(join(process.cwd(), 'ui/transport-editor.js'), 'utf8');
+  assert.match(editor, /rankTransportTargets/);
+  assert.match(editor, /projected after outbound delivery/);
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  assert.match(main, /executeNextTransportStepOnce/);
+});
+
 test('travel mode precedes mining destination and same-system wording stays compact', async () => {
   const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
   assert.ok(source.indexOf('aria-label="Travel"') < source.indexOf('aria-label="Mining Destination"'));
@@ -160,6 +174,19 @@ test('mining tooltips use per-fleet multi-resource progress without Estimated', 
   assert.doesNotMatch(script, /title: `Estimated/);
   assert.match(main, /copperLoops/);
   assert.match(c4, /expectedResources/);
+});
+
+test('Save validates the rendered cached catalog, disables on network loss, and coalesces errors', async () => {
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  assert.match(main, /getCatalogSnapshot\(settings\.playerProfile\)/);
+  assert.match(main, /catalogForAssignmentSave\(catalogSnapshot,catalogRevision\)/);
+  assert.doesNotMatch(main, /automation:save[\s\S]{0,500}loadMiningAutomationCatalog\(settings\)/);
+  assert.match(main, /saved disabled and awaiting network/);
+  assert.match(main, /recordAutomationActivityCoalesced/);
+  assert.match(script, /repeated \$\{entry\.repeatCount\} times/);
+  assert.doesNotMatch(script, /item\.textContent = `Save blocked/);
+  assert.match(script, /saveAutomationAssignment\(drafts,automationCatalogRevision\)/);
 });
 
 test('Automation warns before navigation when assignment changes are unsaved', async () => {

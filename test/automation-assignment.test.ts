@@ -75,3 +75,32 @@ test('scanning refuses a route that fits nominal fuel but leaves no rounding res
   const scans={...catalog,scanRegions:[{id:1,available:true,border:[[0,0],[100,0],[100,100],[0,100]].map(([x,y])=>({xRaw:(BigInt(x)*(1n<<56n)).toString(),yRaw:(BigInt(y)*(1n<<56n)).toString()}))}],scanPatterns:[{id:0,name:'Broad Spectrum',available:true,costs:[]}]};
   assert.throws(()=>validateSupportedAutomationAssignment({...input,assignment:'scanning',travelMode:'subwarp',scanPatternId:0,scanSectorX:90,scanSectorY:30},scans,'profile-1'),/return reserve/);
 });
+
+test('transport validates direct reciprocal lane, exact cargo, projected return stock, and passenger capacity', () => {
+  const transportCatalog = {
+    ...catalog,
+    fleets: catalog.fleets.map(fleet => ({ ...fleet, cargoCapacityRaw: '100', requiredCrew: 2, passengerCapacity: 5, crewCount:2 })),
+    transportSystems: [
+      { address: 'eternity', systemId: 10, name: 'Eternity', coordinates: {x:40,y:30}, connections: [11], availableCrew: 7, registered: true,
+        cargo: [{cargoId:329,name:'Carbon',amountRaw:'12',storageCostRaw:'1'}] },
+      { address: 'sastri', systemId: 11, name: 'Sastri', coordinates: {x:41,y:30}, connections: [10], availableCrew: 1, registered: true,
+        cargo: [{cargoId:311,name:'Copper Ore',amountRaw:'3',storageCostRaw:'1'}] },
+    ],
+  };
+  const saved = validateSupportedAutomationAssignment({
+    fleetAddress:'fleet-mf01', assignment:'transport', homeSystemAddress:'eternity', destinationAddress:'sastri', travelMode:'warp-lane',
+    cargoOut:[{cargoId:329,amountRaw:'5'}], cargoBack:[{cargoId:329,amountRaw:'4'},{cargoId:311,amountRaw:'3'}], crewOut:4, crewBack:5,
+    resourceId:0,
+  }, transportCatalog, 'profile-1');
+  assert.equal(saved.assignment, 'transport');
+  assert.deepEqual(saved.cargoOut, [{cargoId:329,amountRaw:'5'}]);
+  assert.equal(saved.crewBack, 5);
+  assert.throws(() => validateSupportedAutomationAssignment({
+    fleetAddress:'fleet-mf01', assignment:'transport', homeSystemAddress:'eternity', destinationAddress:'sastri', travelMode:'warp-lane',
+    cargoOut:[{cargoId:329,amountRaw:'5'}], cargoBack:[{cargoId:329,amountRaw:'6'}], crewOut:4, crewBack:0, resourceId:0,
+  }, transportCatalog, 'profile-1'), /available/i);
+  assert.throws(() => validateSupportedAutomationAssignment({
+    fleetAddress:'fleet-mf01', assignment:'transport', homeSystemAddress:'eternity', destinationAddress:'sastri', travelMode:'warp-lane',
+    cargoOut:[], cargoBack:[], crewOut:6, crewBack:0, resourceId:0,
+  }, transportCatalog, 'profile-1'), /passenger/i);
+});
