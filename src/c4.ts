@@ -16,7 +16,7 @@ import { assertMiningResourcesAvailable, resolveMiningResourceEligibility } from
 import { appendStopMiningCareerXp, planStartMiningResource, type StopMiningCareerXpAccounts } from './mining-plans.js';
 import { resolveStopMiningCareerXp } from './stop-mining-xp.js';
 import type { AppSettings } from './settings.js';
-import { stoppingDirective, type AutomationStopMode } from './automation-stop.js';
+import { stoppingDirective, type AutomationStopMode, type StoppingDirective } from './automation-stop.js';
 
 import { signAndSimulateTransaction, signAndSendTransactionOnce } from './signed-simulation.js';
 
@@ -181,6 +181,17 @@ export function calculateServiceBundleAmounts(input: {
 export type AuthorizedLiveAction = 'register-starbase' | 'dock' | 'unload' | 'load' | 'undock' | 'start-mining' | 'stop-mining';
 
 type AutomaticMiningDecision = CopperLoopNextStep | { kind: 'register-starbase' };
+
+/** Keeps the quantities and other payload selected from fresh chain state.
+ * Only an operator stop directive may replace the observed action. */
+export function selectAutomaticMiningDecision(
+  observedDecision: AutomaticMiningDecision,
+  directive: Exclude<StoppingDirective, 'complete'>,
+): AutomaticMiningDecision {
+  return directive === 'stop-mining' || directive === 'dock'
+    ? { kind: directive }
+    : observedDecision;
+}
 
 export interface LiveCopperStepResult {
   fleet: string;
@@ -889,7 +900,7 @@ export async function executeNextMiningStepOnce(
       action,
       ...(nextTargetStop === undefined ? {} : { targetStopAtUnixSeconds: nextTargetStop.toString() }),
     });
-    const decision = { kind: action } as AutomaticMiningDecision;
+    const decision = selectAutomaticMiningDecision(observed.decision, directive);
     const plan = await planForDecision(sage, observed.fleet, observed.character, observed.home, observed.asteroid, observed.authorization, decision, settings.rpcUrl, scope);
     const prepared = { ...observed, decision, plan } as PreparedCopperStep;
     const result = await executePreparedCopperStep(sage, rpc, settings, secretKey, action, prepared, onProgress, fleetName, fleetAddress, scope);
