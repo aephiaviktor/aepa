@@ -124,7 +124,10 @@ input:disabled, select:disabled { opacity: .58; }
 .automation-fleet-row.pending { border-left-color: #f2cd68; }
 .automation-fleet-row.stopping { border-left-color: #e49a52; background: linear-gradient(90deg, #3a2617, #061b2e); }
 .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
-.stop-fleet { min-width: 72px; height: 31px; padding: 5px 8px; }
+.fleet-action { min-width: 72px; height: 31px; padding: 5px 8px; }
+.start-fleet { border-color: #2ca77a; background: #0a503d; color: #a9ffe0; }
+.start-fleet:hover:not(:disabled) { border-color: #52dbac; background: #0d6b50; }
+.start-fleet:disabled { opacity: .72; }
 .stop-fleet:disabled { color: #e9bd78; border-color: #805d32; background: #392817; opacity: 1; }
 .remove-fleet { width: 31px; height: 31px; font-size: 17px; }
 .add-fleet-wrap { padding: 9px 10px; border-top: 1px solid #104766; background: #03101c; }

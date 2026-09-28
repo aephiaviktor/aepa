@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('aepa', Object.freeze({
   getAutomationState: () => ipcRenderer.invoke('automation:state'),
   saveAutomationAssignment: (value) => ipcRenderer.invoke('automation:save', value),
   requestAutomationStop: (fleetAddress, mode) => ipcRenderer.invoke('automation:request-stop', fleetAddress, mode),
-  setAutomationEnabled: (enabled) => ipcRenderer.invoke('automation:set-enabled', enabled),
+  setAutomationEnabled: (enabled, fleetAddress) => ipcRenderer.invoke('automation:set-enabled', enabled, fleetAddress),
   recoverOperation: (id) => ipcRenderer.invoke('automation:recover', id),
   clearAutomationPause: () => ipcRenderer.invoke('automation:clear-pause'),
   simulateNextCopperStep: () => ipcRenderer.invoke('automation:simulate-next'),

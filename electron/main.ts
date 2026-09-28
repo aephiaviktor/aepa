@@ -307,23 +307,34 @@ app.whenReady().then(() => {
     scheduleAutomationTick(0);
     return automationState();
   });
-  ipcMain.handle('automation:set-enabled', async (_event, enabled) => {
+  ipcMain.handle('automation:set-enabled', async (_event, enabled, fleetAddress) => {
     if (typeof enabled !== 'boolean') throw new Error('Automation enabled state must be boolean');
-    const assignment = database.getAutomationAssignment();
+    if (typeof fleetAddress !== 'string' || fleetAddress.length < 1 || fleetAddress.length > 64) throw new Error('Invalid Fleet address');
+    const assignment = database.getAutomationAssignment(fleetAddress);
     if (!assignment) throw new Error('Save the supported Automation assignment first');
     if (enabled) {
-      assertAutomationCanEnable(assignment);
-      if (assignment.assignment === 'scanning' && assignment.travelMode !== 'subwarp') throw new Error(SCANNING_WARP_UNAVAILABLE);
-      const signer = await getAuthorizedSignerStatus(signerPath);
-      if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
-      if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
-      if (recoveringFleets.has(assignment.fleetAddress)) throw new Error('Fleet recovery is in progress');
-      database.setAutomationEnabled(true);
-      database.recordAutomationActivity({ kind: 'enabled', detail: 'Live automatic execution explicitly enabled' });
-      scheduleAutomationTick(0);
+      try {
+        assertAutomationCanEnable(assignment);
+        if (assignment.assignment === 'mining' && isCrossSystemTravelMode(assignment.travelMode)) {
+          throw new Error('Cross-system execution remains disabled until C4 fuel, routing, arrival, and return behavior has been validated');
+        }
+        if (assignment.assignment === 'scanning' && assignment.travelMode !== 'subwarp') throw new Error(SCANNING_WARP_UNAVAILABLE);
+        const signer = await getAuthorizedSignerStatus(signerPath);
+        if (!signer.authorizedForProfile || signer.error) throw new Error(signer.error ?? 'An authorized C4 signer is required');
+        if (assignment.profile !== database.getSettings().playerProfile) throw new Error('Saved Automation assignment belongs to another Player Profile');
+        if (recoveringFleets.has(assignment.fleetAddress)) throw new Error('Fleet recovery is in progress');
+        database.setAutomationEnabled(true, fleetAddress);
+        database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'enabled', action: 'start-automation', detail: 'Saved assignment enabled; normal scheduler validation and execution requested' });
+        scheduleAutomationTick(0);
+      } catch (error) {
+        const detail = `Start blocked — ${String((error as Error)?.message ?? error)}`;
+        if (!assignment.enabled && assignment.status !== 'paused') database.setAutomationBlocked(detail, fleetAddress);
+        database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', action: 'start-automation', detail });
+        throw error;
+      }
     } else {
-      database.setAutomationEnabled(false);
-      database.recordAutomationActivity({ kind: 'disabled', detail: 'Automatic execution disabled by the operator' });
+      database.setAutomationEnabled(false, fleetAddress);
+      database.recordAutomationActivity({ fleetAddress: assignment.fleetAddress, fleetName: assignment.fleetName, kind: 'disabled', detail: 'Automatic execution disabled by the operator' });
     }
     return automationState();
   });

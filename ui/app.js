@@ -16,6 +16,7 @@ let automationRuntime;
 let lastFleetSnapshotKey;
 let miningLoopPlans = new Map();
 let pendingStopFleet;
+const startingFleets = new Set();
 
 function short(value) {
   return value ? `${value.slice(0, 7)}…${value.slice(-5)}` : '—';
@@ -492,7 +493,7 @@ function createAutomationRow(draft = {}) {
     <label class="scanning-field" hidden><input data-field="scan-x" aria-label="Scan Sector X" type="number" min="-128" max="127" step="1" required></label>
     <label class="scanning-field" hidden><input data-field="scan-y" aria-label="Scan Sector Y" type="number" min="-128" max="127" step="1" required></label>
     <small class="scanning-field scan-costs" role="status" hidden></small>
-    <div class="row-actions"><button class="stop-fleet secondary" type="button">Stop</button><button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button></div>
+    <div class="row-actions"><button class="stop-fleet fleet-action secondary" type="button">Stop</button><button class="remove-fleet icon" type="button" aria-label="Remove fleet assignment">×</button></div>
   </div>`;
   const fleet = row.querySelector('[data-field="fleet"]');
   replaceSelectOptions(fleet, availableFleetOptions(row, draft.fleetAddress), draft.fleetAddress);
@@ -516,8 +517,26 @@ function createAutomationRow(draft = {}) {
     row.remove();
     renderAutomationRows(writeAutomationDrafts());
   };
-  row.querySelector('.stop-fleet').onclick = () => {
+  row.querySelector('.fleet-action').onclick = async () => {
     const persisted = (automationRuntime?.assignments ?? []).find((assignment) => assignment.fleetAddress === fleet.value);
+    if (persisted && !persisted.enabled && persisted.status === 'disabled' && !persisted.stopMode) {
+      startingFleets.add(persisted.fleetAddress);
+      syncPendingRowIndicators();
+      try {
+        renderAutomationState(await window.aepa.setAutomationEnabled(true, persisted.fleetAddress));
+        renderAutomationRows(savedDrafts());
+      } catch (error) {
+        try { renderAutomationState(await window.aepa.getAutomationState()); } catch {}
+        const item = document.createElement('div');
+        item.className = 'automation-issue error';
+        item.textContent = `Start blocked — ${error.message || String(error)}`;
+        $('automation-issue-list').prepend(item);
+      } finally {
+        startingFleets.delete(persisted.fleetAddress);
+        syncPendingRowIndicators();
+      }
+      return;
+    }
     if (!persisted?.enabled || persisted.status !== 'running' || persisted.stopMode) return;
     pendingStopFleet = { address: persisted.fleetAddress, name: persisted.fleetName };
     $('stop-title').textContent = `Stop ${persisted.fleetName} Automation?`;
@@ -625,15 +644,23 @@ function syncPendingRowIndicators() {
     for (const select of row.querySelectorAll('select')) select.disabled = stopping;
     updateResourceCounter(row);
     if (stopping) for (const input of row.querySelectorAll('input')) input.disabled = true;
-    const stop = row.querySelector('.stop-fleet');
-    stop.hidden = !persisted?.enabled && !stopping;
-    stop.disabled = stopping || persisted?.status === 'paused';
-    stop.textContent = persisted?.stopMode === 'now'
+    const action = row.querySelector('.fleet-action');
+    const starting = !!persisted && startingFleets.has(persisted.fleetAddress);
+    const startable = !!persisted && !persisted.enabled && persisted.status === 'disabled' && !stopping;
+    action.hidden = !startable && !persisted?.enabled && !stopping;
+    action.disabled = starting || stopping || persisted?.status === 'paused';
+    action.classList.toggle('start-fleet', startable);
+    action.classList.toggle('stop-fleet', !startable);
+    action.textContent = starting
+      ? 'Starting…'
+      : startable
+        ? 'Start'
+        : persisted?.stopMode === 'now'
       ? 'Stopping…'
       : persisted?.stopMode === 'end-of-cycle'
         ? 'Stopping after cycle'
         : 'Stop';
-    stop.title = persisted?.stopMode === 'end-of-cycle' ? 'Stopping after current cycle' : persisted?.stopMode === 'now' ? 'Stopping now' : '';
+    action.title = startable ? 'Start this saved assignment' : persisted?.stopMode === 'end-of-cycle' ? 'Stopping after current cycle' : persisted?.stopMode === 'now' ? 'Stopping now' : '';
     const remove = row.querySelector('.remove-fleet');
     remove.disabled = !!persisted && (persisted.enabled || persisted.status === 'paused' || stopping);
     remove.title = remove.disabled ? 'Stop this fleet safely before removing its assignment.' : '';

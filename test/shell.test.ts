@@ -192,6 +192,21 @@ test('active fleet rows expose a guarded durable stop dialog', async () => {
   assert.match(main, /Resuming the already-requested safe shutdown/);
 });
 
+test('disabled fleet rows expose a fleet-scoped Start action in the Stop position', async () => {
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
+  const preload = await readFile(join(process.cwd(), 'electron/preload.cjs'), 'utf8');
+  const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
+  assert.match(script, /class="stop-fleet fleet-action secondary"/);
+  assert.match(script, /setAutomationEnabled\(true, persisted\.fleetAddress\)/);
+  assert.match(script, /Starting…/);
+  assert.match(script, /Start blocked/);
+  assert.match(styles, /\.start-fleet/);
+  assert.match(preload, /setAutomationEnabled: \(enabled, fleetAddress\).*automation:set-enabled.*fleetAddress/);
+  assert.match(main, /automation:set-enabled[\s\S]*fleetAddress[\s\S]*getAutomationAssignment\(fleetAddress\)/);
+  assert.match(main, /setAutomationBlocked\(detail, fleetAddress\)/);
+});
+
 test('Fleet and Player Profile addresses are full, selectable, and copyable', async () => {
   const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
   const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
