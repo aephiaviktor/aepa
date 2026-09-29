@@ -5,6 +5,7 @@ import { refreshTransportEditor } from './transport-editor.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
 import { formatLocalHhmm } from '../dist/src/copper-estimate.js';
 import { formatAssignmentSelection, formatTransportCargoTooltip } from '../dist/src/assignment-summary.js';
+import { activityFleetNames, filterActivityEntries } from '../dist/src/activity-filter.js';
 
 const $ = (id) => document.getElementById(id);
 const FLEET_COLUMNS_KEY = 'aepa.fleetColumns.v1';
@@ -19,6 +20,7 @@ let automationRuntime;
 let lastFleetSnapshotKey;
 let miningLoopPlans = new Map();
 let pendingStopFleet;
+let activityEntries = [];
 const startingFleets = new Set();
 
 function short(value) {
@@ -447,7 +449,7 @@ function refreshAutomationRow(row, preferredDestination, preferredTravelMode) {
   row.classList.toggle('scanning',scanning);
   row.classList.toggle('transport',transport);
   const headings = scanning ? ['Fleet','Assignment','Home Starbase','Scan Sector X','Scan Sector Y','Scan Pattern','Travel Mode','Actions'] : transport ? ['Fleet','Assignment','Home Starbase','Travel','Target','Cargo','Cargo back','Crew','Crew back','Actions'] : ['Fleet','Assignment','Home Starbase','Travel','Mining Destination','Resources','Actions'];
-  row.querySelector('.row-assignment-columns').replaceChildren(...headings.map(title => { const span=document.createElement('span');span.textContent=title;return span; }));
+  row.querySelector('.row-assignment-columns').replaceChildren(...headings.map(title => { const span=document.createElement('span');span.textContent=title;span.title=title;return span; }));
   row.querySelector('[data-field="destination"]').hidden = scanning;
   row.querySelector('.resource-picker').hidden = scanning || transport;
   for (const field of row.querySelectorAll('.scanning-field')) field.hidden = !scanning;
@@ -622,9 +624,22 @@ function renderActivityEntries(host, entries) {
   }));
 }
 
+function renderActivityFilters(entries = activityEntries) {
+  activityEntries = entries;
+  const fleetFilter = $('activity-fleet-filter');
+  const selectedFleet = fleetFilter.value;
+  const fleetNames = activityFleetNames(entries);
+  fleetFilter.replaceChildren(new Option('All fleets', ''), ...fleetNames.map((name) => new Option(name, name)));
+  fleetFilter.value = fleetNames.includes(selectedFleet) ? selectedFleet : '';
+  const filtered = filterActivityEntries(entries, fleetFilter.value, $('activity-text-filter').value);
+  renderActivityEntries($('activity-page-list'), filtered);
+  $('activity-filter-summary').textContent = filtered.length === entries.length
+    ? `${entries.length} event${entries.length === 1 ? '' : 's'}`
+    : `${filtered.length} of ${entries.length} events`;
+}
+
 function renderAutomationIssues(state) {
   const assignments = state?.assignments ?? (state?.assignment ? [state.assignment] : []);
-  const errors = assignments.filter((assignment) => assignment.status === 'paused' || assignment.lastError);
   let capture = document.getElementById('raw-capture-health');
   if (!capture) {
     capture = document.createElement('p');
@@ -671,10 +686,8 @@ function renderAutomationIssues(state) {
     recovery.append(entry);
   }
   const activity = state?.activity ?? [];
-  $('fleet-log-summary').textContent = errors.length ? `${errors.length} fleet issue${errors.length === 1 ? '' : 's'}` : 'No current issues';
   const entries = activity.length ? activity : [{ occurredAt: '', kind: 'waiting', detail: 'No Automation activity recorded yet' }];
-  renderActivityEntries($('automation-issue-list'), entries);
-  renderActivityEntries($('activity-page-list'), entries);
+  renderActivityFilters(entries);
 }
 
 function syncPendingRowIndicators() {
@@ -881,6 +894,8 @@ $('close-status').onclick = () => setStatusOpen(false);
 $('show-fleets').onclick = () => requestNavigation(() => setActivePage('fleets'));
 $('show-automation').onclick = () => setActivePage('automation');
 $('show-activity').onclick = () => requestNavigation(() => setActivePage('activity'));
+$('activity-fleet-filter').onchange = () => renderActivityFilters();
+$('activity-text-filter').oninput = () => renderActivityFilters();
 $('copy-profile-address').onclick = () => void copyAddress($('copy-profile-address'), settings?.playerProfile);
 $('add-fleet').onclick = () => {
   const drafts = writeAutomationDrafts();

@@ -73,14 +73,12 @@ test('automation workspace exposes the agreed cascading mining configuration', a
   const preload = await readFile(join(process.cwd(), 'electron/preload.cjs'), 'utf8');
   assert.match(html, /id="automation-rows"/);
   assert.match(html, /id="add-fleet"/);
-  assert.match(html, /id="automation-issues"/);
+  assert.doesNotMatch(html, /id="automation-issues"/);
   for (const field of ['fleet', 'assignment', 'home', 'resource', 'destination', 'travel']) {
     assert.match(script, new RegExp(`data-field=\\"${field}\\"`));
   }
   assert.match(html, /Region \| System \| Asteroid belt \| Home distance/);
   assert.match(html, /class="assignment-columns compact-field-grid"/);
-  assert.match(html, /<h3>Fleet Log<\/h3>/);
-  assert.ok(html.indexOf('id="add-fleet"') < html.indexOf('id="automation-issues"'), 'Fleet Log must be below Add Fleet inside Fleet Assignment');
   assert.match(html, /config-header/);
   assert.match(html, /Fleet Assignment/);
   assert.doesNotMatch(html, /Mining Configuration/);
@@ -148,14 +146,26 @@ test('Transport editor exposes target, cargo, return cargo, and crew controls', 
   assert.match(main, /executeNextTransportStepOnce/);
 });
 
-test('Transport rows wrap whenever the live Status panel narrows the assignment area', async () => {
+test('Transport rows stay aligned in one compact row when live Status narrows the workspace', async () => {
   const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
   const selector = '.app-shell.status-open .automation-fleet-row.transport .compact-field-grid';
   const rule = styles.indexOf(selector);
   assert.notEqual(rule, -1);
-  const media = styles.lastIndexOf('@media', rule);
-  const mediaClose = media < 0 ? -1 : styles.indexOf('}', styles.indexOf('}', media) + 1);
-  assert.ok(media < 0 || mediaClose < rule, 'Status-open Transport wrapping must not depend on viewport width');
+  assert.match(styles.slice(rule, rule + 500), new RegExp('grid-template-columns:\\s*minmax\\(0,1fr\\)[^;]*48px 48px 82px'));
+  assert.doesNotMatch(styles, new RegExp('status-open \\.automation-fleet-row\\.transport \\.compact-field-grid\\s*\\{[^}]*repeat\\(3'));
+  assert.match(styles, /\.transport \.field-grid > \.row-actions \{ grid-column:10; grid-row:1/);
+  assert.match(styles, /\.transport \.destination-field \{ grid-column:auto/);
+  assert.match(styles, /\.row-assignment-columns > span \{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap/);
+});
+
+test('Automation omits its duplicate activity log and Activity exposes fleet and text filters', async () => {
+  const html = await readFile(join(process.cwd(), 'ui/index.html'), 'utf8');
+  const script = await readFile(join(process.cwd(), 'ui/app.js'), 'utf8');
+  assert.doesNotMatch(html, /id="automation-issues"|id="automation-issue-list"|Fleet Log/);
+  assert.match(html, /id="activity-fleet-filter"/);
+  assert.match(html, /id="activity-text-filter"/);
+  assert.match(script, /filterActivityEntries/);
+  assert.match(script, /renderActivityFilters/);
 });
 
 test('automatic execution avoids a redundant Profile authority RPC read', async () => {

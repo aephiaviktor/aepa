@@ -57,16 +57,17 @@
           </div>
           <div id="automation-rows"></div>
           <div class="add-fleet-wrap"><button id="add-fleet" class="secondary" type="button">+ Add Fleet</button></div>
-          <section id="automation-issues" class="automation-issues" aria-label="Fleet Log">
-            <div class="fleet-log-head"><div><p class="eyebrow">AUTOMATION ACTIVITY</p><h3>Fleet Log</h3></div><span id="fleet-log-summary">No issues</span></div>
-            <div id="automation-issue-list" class="automation-issue-list"></div>
-          </section>
         </form>
       </section>
       </section>
       <section id="activity-page" class="page-view" hidden>
         <section class="panel">
           <div class="panel-title"><div><p class="eyebrow">AUTOMATION ACTIVITY</p><h3>Activity</h3></div><span>Latest fleet events</span></div>
+          <div class="activity-filters" aria-label="Activity filters">
+            <label>Fleet<select id="activity-fleet-filter"><option value="">All fleets</option></select></label>
+            <label>Search<input id="activity-text-filter" type="search" placeholder="Search activity text" spellcheck="false"></label>
+          </div>
+          <p id="activity-filter-summary" class="activity-filter-summary" aria-live="polite"></p>
           <div id="activity-page-list" class="automation-issue-list activity-page-list"></div>
         </section>
       </section>
