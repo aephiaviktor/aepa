@@ -64,6 +64,12 @@ async function exactFleetPosition(rpc: Rpc, fleet: FleetView) {
   return {x: {raw: raw.location[0].raw, value: fleet.location.x}, y: {raw: raw.location[1].raw, value: fleet.location.y}};
 }
 function equalPoint(a: {x:number;y:number}, b: {x:number;y:number}) { return a.x === b.x && a.y === b.y; }
+export function scanningDockObserved(before: Pick<FleetView,'state'>, after: Pick<FleetView,'state'|'location'>, homeAddress: string) {
+  if (after.state.kind !== 'docked') return false;
+  return before.state.kind === 'warp'
+    ? equalPoint(after.location,before.state.to)
+    : String(after.state.system.address) === homeAddress;
+}
 
 async function observeScanning(client: Client, rpc: Rpc, settings: AppSettings, assignment: AutomationAssignmentRecord, phase: ReturnType<typeof scanningPhase>) {
   if (assignment.assignment !== 'scanning' || assignment.profile !== settings.playerProfile) throw new Error('Scanning assignment does not match Settings');
@@ -173,7 +179,7 @@ async function scanPostcondition(client: Client, before: Observation, action: Sc
     await getStarbasePlayerForCharacterAtSystem(client.context, before.character.address, before.home.address, READ);
     return true;
   }
-  if (action === 'dock') return fleet.state.kind === 'docked' && fleet.state.system.address === before.home.address;
+  if (action === 'dock') return scanningDockObserved(before.fleet,fleet,String(before.home.address));
   if (action === 'undock') return fleet.state.kind === 'idle';
   if (action.startsWith('travel-')) {
     const destination = action === 'travel-home' ? before.home.coordinates : action === 'travel-sector' ? before.sector : before.contactPoint!;

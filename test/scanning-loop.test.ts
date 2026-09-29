@@ -43,8 +43,9 @@ test('both stop modes unload scan supplies, refill fuel, then stop', () => {
   }
 });
 
-test('a stored Warp journey never masquerades as Idle or silently falls back to Subwarp',()=>{
-  assert.equal(decideScanningStep({...base,fleetState:'warp',arrivesAt:99n}).kind,'blocked');
+test('a stored Warp journey waits until arrival, then docks instead of falling back to Subwarp',()=>{
+  assert.equal(decideScanningStep({...base,fleetState:'warp',arrivesAt:101n}).kind,'wait');
+  assert.equal(decideScanningStep({...base,fleetState:'warp',arrivesAt:100n}).kind,'dock');
 });
 test('empty signal after a recovery stays scanning until supplies, capacity or return fuel require service',()=>{
   assert.equal(decideScanningStep({...base,phase:'scanning'}).kind,'scan-detect');

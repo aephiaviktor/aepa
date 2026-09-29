@@ -182,10 +182,8 @@ input:disabled, select:disabled { opacity: .58; }
 .transport-cargo-options label { display:grid; grid-template-columns:auto 1fr 90px; align-items:center; gap:8px; }
 .transport-cargo-options input[type="number"] { min-width:0; width:90px; }
 .automation-fleet-row.transport .compact-field-grid { grid-template-columns:repeat(9,minmax(110px,1fr)) auto; }
-@media (max-width: 1550px) {
-  .app-shell.status-open .automation-fleet-row.transport .compact-field-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
-  .app-shell.status-open .automation-fleet-row.transport .row-actions { justify-content:flex-start; }
-}
+.app-shell.status-open .automation-fleet-row.transport .compact-field-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.app-shell.status-open .automation-fleet-row.transport .row-actions { justify-content:flex-start; }
 .activity-page-list { max-height: calc(100vh - 150px); padding: 0; }
 .warning-dialog { width: min(520px, calc(100vw - 40px)); border: 1px solid #8c6e3c; border-radius: 10px; padding: 22px; background: #081923; color: var(--text); box-shadow: 0 20px 70px #000c; }
 .warning-dialog::backdrop { background: #010712c9; backdrop-filter: blur(4px); }

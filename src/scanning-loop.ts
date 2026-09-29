@@ -33,8 +33,9 @@ export function decideScanningStep(s: ScanningObservation): ScanningDecision {
   if (s.fleetState === 'subwarp' || s.fleetState === 'warp') {
     if (s.arrivesAt === undefined) return { kind: 'blocked', reason: 'Missing journey arrival time' };
     if (s.now < s.arrivesAt) return wait(s.arrivesAt, 'Travelling');
-    return s.fleetState === 'subwarp' ? { kind: 'settle-arrival' }
-      : { kind: 'blocked', reason: 'SDK does not support settlement of a stored Warp journey; reconcile Fleet state' };
+    // C4 keeps an arrived Warp journey stored until the Fleet docks. Unlike
+    // Subwarp, Warp has no separate settle action; docking clears the journey.
+    return s.fleetState === 'subwarp' ? { kind: 'settle-arrival' } : { kind: 'dock' };
   }
   if (s.fleetState !== 'idle' && s.fleetState !== 'docked') return { kind: 'blocked', reason: `Scanning cannot operate a ${s.fleetState} Fleet` };
   if (s.signal === 'pending-entropy') {

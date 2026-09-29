@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { scanCargoCosts, scanningPatternOption, validateScanSector } from '../src/scanning-model.js';
+import { scanningDockObserved } from '../src/scanning-c4.js';
 
 test('scan consumption rounds each configured cost before aggregating, using exact integers', () => {
   assert.deepEqual(scanCargoCosts(3, [
@@ -43,4 +44,20 @@ test('scanning persists per-stage action timings in confirmed activity detail', 
     .catch(() => readFile(new URL('../../src/scanning-c4.ts', import.meta.url), 'utf8'));
   assert.match(source, /new ActionStageTimer\(\)/);
   assert.match(source, /formatActionTimings\(result\.timings\)/);
+});
+
+test('scanning accepts an arrived Warp dock only at the recorded journey destination', () => {
+  const before = {state:{kind:'warp',to:{x:40,y:30}}};
+  const arrived = {state:{kind:'docked',system:{address:'target'}},location:{x:40,y:30}};
+  const wrong = {state:{kind:'docked',system:{address:'target'}},location:{x:41,y:30}};
+  assert.equal(scanningDockObserved(before as never, arrived as never, 'home'), true);
+  assert.equal(scanningDockObserved(before as never, wrong as never, 'home'), false);
+});
+
+test('ordinary scanning docking still requires the configured Home Starbase', () => {
+  const before = {state:{kind:'idle'}};
+  const home = {state:{kind:'docked',system:{address:'home'}},location:{x:1,y:2}};
+  const other = {state:{kind:'docked',system:{address:'other'}},location:{x:1,y:2}};
+  assert.equal(scanningDockObserved(before as never, home as never, 'home'), true);
+  assert.equal(scanningDockObserved(before as never, other as never, 'home'), false);
 });

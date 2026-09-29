@@ -148,9 +148,14 @@ test('Transport editor exposes target, cargo, return cargo, and crew controls', 
   assert.match(main, /executeNextTransportStepOnce/);
 });
 
-test('Transport rows wrap when the live Status panel narrows the assignment area', async () => {
+test('Transport rows wrap whenever the live Status panel narrows the assignment area', async () => {
   const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
-  assert.match(styles, /\.app-shell\.status-open \.automation-fleet-row\.transport \.compact-field-grid\s*\{/);
+  const selector = '.app-shell.status-open .automation-fleet-row.transport .compact-field-grid';
+  const rule = styles.indexOf(selector);
+  assert.notEqual(rule, -1);
+  const media = styles.lastIndexOf('@media', rule);
+  const mediaClose = media < 0 ? -1 : styles.indexOf('}', styles.indexOf('}', media) + 1);
+  assert.ok(media < 0 || mediaClose < rule, 'Status-open Transport wrapping must not depend on viewport width');
 });
 
 test('automatic execution avoids a redundant Profile authority RPC read', async () => {
