@@ -52,6 +52,14 @@ test('sidebar switches between distinct Fleets and Automation pages without scro
   assert.match(html, /id="automation-page"[^>]+class="[^"]*page-view/);
   assert.match(script, /setActivePage/);
   assert.doesNotMatch(script, /scrollIntoView/);
+  assert.match(html, /id="sidebar-toggle"[^>]+aria-label="Collapse sidebar"/);
+  assert.match(html, /id="show-activity"[^>]*><span[^>]*>AC<\/span>/);
+  assert.match(script, /classList\.toggle\('nav-collapsed'\)/);
+  assert.match(script, /Expand sidebar/);
+  const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
+  assert.match(styles, /\.app-shell\.nav-collapsed\s*\{[^}]*grid-template-columns:\s*68px 1fr/);
+  assert.match(styles, /\.app-shell\.nav-collapsed\.status-open\s*\{[^}]*grid-template-columns:\s*68px 1fr 300px/);
+  assert.match(styles, /nav-collapsed[^}]*\.nav-label[^{]*\{[^}]*display:\s*none/);
 });
 
 test('fleet workspace uses My Fleets, Aephia artwork, and selectable columns', async () => {
@@ -151,11 +159,18 @@ test('Transport rows stay aligned in one compact row when live Status narrows th
   const selector = '.app-shell.status-open .automation-fleet-row.transport .compact-field-grid';
   const rule = styles.indexOf(selector);
   assert.notEqual(rule, -1);
-  assert.match(styles.slice(rule, rule + 500), new RegExp('grid-template-columns:\\s*minmax\\(0,1fr\\)[^;]*48px 48px 82px'));
+  assert.match(styles.slice(rule, rule + 500), new RegExp('grid-template-columns:\\s*minmax\\(72px,\\.7fr\\)[^;]*48px 48px 82px'));
   assert.doesNotMatch(styles, new RegExp('status-open \\.automation-fleet-row\\.transport \\.compact-field-grid\\s*\\{[^}]*repeat\\(3'));
   assert.match(styles, /\.transport \.field-grid > \.row-actions \{ grid-column:10; grid-row:1/);
   assert.match(styles, /\.transport \.destination-field \{ grid-column:auto/);
   assert.match(styles, /\.row-assignment-columns > span \{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap/);
+  const compactRule = styles.slice(rule, rule + 900);
+  assert.match(compactRule, /minmax\(72px,\.7fr\) minmax\(72px,\.68fr\)/);
+  assert.match(compactRule, /minmax\(0,\.7fr\) minmax\(0,\.7fr\)/);
+  assert.doesNotMatch(compactRule, /font-size:\s*9px/);
+  assert.match(styles, /\.compact-field-grid select, \.compact-field-grid input \{[^}]*font-size:\s*10px/);
+  assert.match(styles, /\.compact-field-grid \{[^}]*grid-template-columns:\s*minmax\(72px, \.78fr\) minmax\(72px, \.68fr\)/);
+  assert.match(styles, /\.automation-fleet-row\.scanning \.compact-field-grid \{[^}]*grid-template-columns:\s*minmax\(72px, \.78fr\) minmax\(72px, \.68fr\)/);
 });
 
 test('Automation omits its duplicate activity log and Activity exposes fleet and text filters', async () => {

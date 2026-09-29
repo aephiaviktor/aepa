@@ -9,11 +9,11 @@
 <body>
   <div class="app-shell" id="app-shell">
     <aside class="sidebar">
-      <div class="brand"><img class="brand-mark" src="../assets/aephia-logo.webp" alt="Aephia"><div><h1>AEPA</h1><p>Aephia Automation</p></div></div>
+      <div class="brand"><img class="brand-mark" src="../assets/aephia-logo.webp" alt="Aephia"><div class="brand-copy"><h1>AEPA</h1><p>Aephia Automation</p></div><button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-pressed="false">‹</button></div>
       <nav aria-label="Workspace">
-        <button id="show-fleets" class="nav-item active" aria-controls="fleets-page" aria-current="page"><span>FL</span>Fleets</button>
-        <button id="show-automation" class="nav-item" aria-controls="automation-page"><span>AU</span>Automation</button>
-        <button id="show-activity" class="nav-item" aria-controls="activity-page"><span>LG</span>Activity</button>
+        <button id="show-fleets" class="nav-item active" aria-controls="fleets-page" aria-current="page" title="Fleets"><span class="nav-code">FL</span><span class="nav-label">Fleets</span></button>
+        <button id="show-automation" class="nav-item" aria-controls="automation-page" title="Automation"><span class="nav-code">AU</span><span class="nav-label">Automation</span></button>
+        <button id="show-activity" class="nav-item" aria-controls="activity-page" title="Activity"><span class="nav-code">AC</span><span class="nav-label">Activity</span></button>
       </nav>
       <section id="fleet-column-picker" class="column-picker" aria-labelledby="fleet-columns-title">
         <h2 id="fleet-columns-title">Fleet columns</h2>
@@ -27,8 +27,8 @@
         </div>
       </section>
       <div class="sidebar-footer">
-        <button id="show-status" class="nav-item"><span>ST</span>Status</button>
-        <button id="open-settings" class="nav-item"><span>SE</span>Settings</button>
+        <button id="show-status" class="nav-item" title="Status"><span class="nav-code">ST</span><span class="nav-label">Status</span></button>
+        <button id="open-settings" class="nav-item" title="Settings"><span class="nav-code">SE</span><span class="nav-label">Settings</span></button>
         <div><strong id="version">v—</strong><span class="testnet-pill">C4 TESTNET</span></div>
       </div>
     </aside>

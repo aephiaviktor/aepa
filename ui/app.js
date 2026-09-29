@@ -888,6 +888,12 @@ async function boot() {
   renderAutomationState(automation);
 }
 
+$('sidebar-toggle').onclick = () => {
+  const collapsed = $('app-shell').classList.toggle('nav-collapsed');
+  $('sidebar-toggle').setAttribute('aria-pressed', String(collapsed));
+  $('sidebar-toggle').setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  $('sidebar-toggle').textContent = collapsed ? '›' : '‹';
+};
 $('open-settings').onclick = () => requestNavigation(() => showSettings(true));
 $('show-status').onclick = () => setStatusOpen($('status-panel').hidden);
 $('close-status').onclick = () => setStatusOpen(false);
