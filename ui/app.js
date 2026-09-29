@@ -4,6 +4,7 @@ import { automationDraftsEqual, formatMiningProgress } from '../dist/src/automat
 import { refreshTransportEditor } from './transport-editor.js';
 import { FLEET_COLUMNS, describeFleetShips, getFleetOwnership, normalizeVisibleColumns } from '../dist/src/fleet-view.js';
 import { formatLocalHhmm } from '../dist/src/copper-estimate.js';
+import { formatAssignmentSelection, formatTransportCargoTooltip } from '../dist/src/assignment-summary.js';
 
 const $ = (id) => document.getElementById(id);
 const FLEET_COLUMNS_KEY = 'aepa.fleetColumns.v1';
@@ -244,11 +245,16 @@ function renderStatusPanel() {
     const pill = document.createElement('span');
     pill.className = 'state-pill';
     const mining = miningPillContent(fleet.state, fleet.address);
+    const assignment = (automationRuntime?.assignments ?? []).find(candidate => candidate.fleetAddress === fleet.address);
     pill.textContent = mining ? mining.label : fleet.state;
     if (mining) {
       pill.dataset.miningPill = 'true';
       pill.dataset.fleetAddress = fleet.address;
       bindMiningPill(pill);
+    }
+    if (assignment?.assignment === 'transport') {
+      row.dataset.statusTooltip = formatTransportCargoTooltip(fleet.snapshot);
+      bindStatusTooltip(row);
     }
     // Status bar is fleet data only: name + state pill, no activity/error text.
     row.append(name, pill);
@@ -391,6 +397,7 @@ function renderResourcePicker(row, destination, selectedIds = []) {
     const input = label.querySelector('input');
     input.dataset.resourceId = String(resource.id);
     input.dataset.available = String(resource.available);
+    input.dataset.resourceName = resource.name;
     input.checked = selected.includes(resource.id);
     label.classList.toggle('locked', !resource.available);
     if (!resource.available) {
@@ -419,7 +426,10 @@ function renderResourcePicker(row, destination, selectedIds = []) {
 function updateResourceCounter(row) {
   const picker = row.querySelector('.resource-picker');
   const count = picker.querySelectorAll('input:checked').length;
-  picker.querySelector('summary').textContent = `Resources · ${count}/8`;
+  const selected = [...picker.querySelectorAll('input:checked')].map(input => ({ name: input.dataset.resourceName }));
+  const formatted = formatAssignmentSelection(selected, 'Resources');
+  picker.querySelector('summary').textContent = formatted.summary;
+  picker.querySelector('summary').title = formatted.title;
   for (const input of picker.querySelectorAll('input')) {
     const locked = input.dataset.available === 'false';
     input.disabled = locked ? !input.checked : !input.checked && count >= 8;
@@ -511,7 +521,7 @@ function createAutomationRow(draft = {}) {
     <select data-field="home" aria-label="Home Starbase"></select>
     <select data-field="travel" aria-label="Travel"><option value="auto">Same system</option><option value="subwarp">Subwarp</option><option value="warp">Warp</option><option value="warp-lane">Warp lane</option></select>
     <select class="destination-field" data-field="destination" aria-label="Mining Destination"></select>
-    <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources · 0/8</summary><div class="resource-options"></div></details>
+    <details data-field="resource" class="resource-picker" aria-label="Resources"><summary>Resources</summary><div class="resource-options"></div></details>
     <details class="transport-field transport-cargo-picker" data-cargo-direction="out" hidden><summary>Cargo</summary><div class="transport-cargo-options"></div></details>
     <details class="transport-field transport-cargo-picker" data-cargo-direction="back" hidden><summary>Cargo back</summary><div class="transport-cargo-options"></div></details>
     <label class="transport-field" hidden><input data-field="crew-out" aria-label="Crew" type="number" min="0" max="65535" step="1" value="0"></label>
@@ -785,6 +795,14 @@ function showMiningTooltip(anchor, title) {
   tip.hidden = false;
 }
 
+function bindStatusTooltip(anchor) {
+  anchor.addEventListener('mouseenter', () => {
+    if (anchor.dataset.statusTooltip) showMiningTooltip(anchor, anchor.dataset.statusTooltip);
+  });
+  anchor.addEventListener('mouseleave', hideMiningTooltip);
+  anchor.addEventListener('blur', hideMiningTooltip);
+}
+
 function hideMiningTooltip() {
   if (!miningTooltip) return;
   miningTooltip.hidden = true;
@@ -827,7 +845,7 @@ function applyMiningPills() {
   // While the tooltip is shown (mouse over a mining pill), refresh its live
   // estimate in place instead of touching the native OS tooltip, which on
   // Windows rebuilds on every title change and causes "Keine Rückmeldung".
-  if (miningTooltipAnchor) {
+  if (miningTooltipAnchor?.dataset.miningPill === 'true') {
     const content = miningPillContent('mining', miningTooltipAnchor.dataset.fleetAddress);
     if (!content?.title) {
       hideMiningTooltip();

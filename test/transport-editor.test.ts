@@ -74,6 +74,8 @@ test('outbound Cargo amount immediately updates projected Cargo back availabilit
     checkbox!.dispatch('change');
     amount!.value = '3';
     amount!.dispatch('input');
+    assert.equal(outSummary.textContent, 'Carbon 3');
+    assert.equal(outSummary.title, 'Carbon: 3');
     assert.equal(backHost.children.length, 1);
     assert.equal(backHost.children[0]!.children[1]!.textContent, 'Carbon · available 3');
   } finally {

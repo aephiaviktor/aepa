@@ -1,4 +1,16 @@
 import { projectedReturnAvailability, rankTransportTargets } from '../dist/src/transport-model.js';
+import { formatAssignmentSelection } from '../dist/src/assignment-summary.js';
+
+function updateCargoSummary(picker,direction){
+  const selected=[...picker.querySelector('.transport-cargo-options').children].flatMap(label=>{
+    const [checkbox,,amount]=label.children;
+    return checkbox.checked&&amount.value?[{name:checkbox.dataset.cargoName,amount:amount.value}]:[];
+  });
+  const formatted=formatAssignmentSelection(selected,direction==='out'?'Cargo':'Cargo back');
+  const summary=picker.querySelector('summary');
+  summary.textContent=formatted.summary;
+  summary.title=formatted.title;
+}
 
 function renderCargoPicker(row,direction,available,selected,onChanged){
   const picker=row.querySelector(`[data-cargo-direction="${direction}"]`);
@@ -8,15 +20,15 @@ function renderCargoPicker(row,direction,available,selected,onChanged){
     const saved=selected.find(value=>value.cargoId===item.cargoId);
     const label=document.createElement('label');
     const checkbox=document.createElement('input');
-    checkbox.type='checkbox'; checkbox.dataset.cargoId=String(item.cargoId); checkbox.checked=!!saved;
+    checkbox.type='checkbox'; checkbox.dataset.cargoId=String(item.cargoId); checkbox.dataset.cargoName=item.name; checkbox.checked=!!saved;
     const name=document.createElement('span'); name.textContent=`${item.name} · available ${item.availableRaw}`;
     const amount=document.createElement('input');
     amount.type='number'; amount.min='1'; amount.step='1'; amount.value=saved?.amountRaw??''; amount.placeholder='Amount'; amount.disabled=!checkbox.checked; amount.max=item.availableRaw; amount.title=item.title??'';
-    checkbox.addEventListener('change',()=>{amount.disabled=!checkbox.checked;if(!checkbox.checked)amount.value='';onChanged();});
-    amount.addEventListener('input',onChanged);
+    checkbox.addEventListener('change',()=>{amount.disabled=!checkbox.checked;if(!checkbox.checked)amount.value='';updateCargoSummary(picker,direction);onChanged();});
+    amount.addEventListener('input',()=>{updateCargoSummary(picker,direction);onChanged();});
     label.append(checkbox,name,amount); host.append(label);
   }
-  picker.querySelector('summary').textContent=direction==='out'?'Cargo':'Cargo back';
+  updateCargoSummary(picker,direction);
 }
 
 function selectedCargo(row,direction,validAmountsOnly=false){

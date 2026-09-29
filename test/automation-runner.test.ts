@@ -82,6 +82,56 @@ test('pauses on every execution error and never retries while paused', async () 
   database.close();
 });
 
+test('refreshes and replans a stale Atlas Kit account precondition before pausing', async () => {
+  const database = enabledDatabase();
+  let calls = 0;
+  const delays: number[] = [];
+  const runner = new AutomaticCopperRunner(database, async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw Object.assign(new Error('The account state required by this Plan changed'), {
+        code: 'ACTION_PRECONDITION_FAILED',
+      });
+    }
+    return { kind: 'waiting', untilUnixSeconds: 2_000n, detail: 'Fresh state observed' };
+  }, undefined, async (delayMs) => { delays.push(delayMs); });
+  assert.deepEqual(await runner.tick(), { kind: 'waiting', untilUnixSeconds: 2_000n });
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [1_000]);
+  assert.equal(database.getAutomationAssignment()?.status, 'running');
+  assert.equal(database.listAutomationActivity().some(row => row.kind === 'paused'), false);
+  database.close();
+});
+
+test('never refreshes an account precondition error that reports post-submission ambiguity', async () => {
+  const database = enabledDatabase();
+  let calls = 0;
+  const runner = new AutomaticCopperRunner(database, async () => {
+    calls += 1;
+    throw Object.assign(new Error('Transaction was submitted once but confirmation was not observed'), {
+      code: 'ACTION_PRECONDITION_FAILED',
+    });
+  }, undefined, async () => { throw new Error('must not wait for an unsafe retry'); });
+  assert.equal((await runner.tick()).kind, 'paused');
+  assert.equal(calls, 1);
+  database.close();
+});
+
+test('bounds stale account refreshes and still pauses when fresh planning cannot converge', async () => {
+  const database = enabledDatabase();
+  let calls = 0;
+  const runner = new AutomaticCopperRunner(database, async () => {
+    calls += 1;
+    throw Object.assign(new Error('The account state required by this Plan changed'), {
+      code: 'ACTION_PRECONDITION_FAILED',
+    });
+  }, undefined, async () => undefined);
+  assert.equal((await runner.tick()).kind, 'paused');
+  assert.equal(calls, 3);
+  assert.equal(database.getAutomationAssignment()?.status, 'paused');
+  database.close();
+});
+
 test('clears the durable mining deadline only after stop-mining is confirmed', async () => {
   const database = enabledDatabase();
   database.setAutomationTargetStop(2_000n);

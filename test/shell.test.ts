@@ -126,10 +126,11 @@ test('shell drops the zero-reserve preview and the manual simulation controls', 
   assert.match(script, /miningPillContent/);
 });
 
-test('destination precedes checkbox resource picker with eight-resource counter', async () => {
+test('destination precedes the checkbox resource picker and selected names replace the counter', async () => {
   const source = await readFile(new URL('../ui/app.js', import.meta.url), 'utf8').catch(() => readFile(new URL('../../ui/app.js', import.meta.url), 'utf8'));
   assert.match(source, /type="checkbox"/);
-  assert.match(source, /\/8/);
+  assert.doesNotMatch(source, /Resources · \d+\/8/);
+  assert.match(source, /formatAssignmentSelection\(selected, 'Resources'\)/);
   assert.ok(source.indexOf('aria-label="Mining Destination"') < source.indexOf('aria-label="Resources"'));
 });
 
@@ -145,6 +146,11 @@ test('Transport editor exposes target, cargo, return cargo, and crew controls', 
   assert.match(editor, /projected after outbound delivery/);
   const main = await readFile(join(process.cwd(), 'electron/main.ts'), 'utf8');
   assert.match(main, /executeNextTransportStepOnce/);
+});
+
+test('Transport rows wrap when the live Status panel narrows the assignment area', async () => {
+  const styles = await readFile(join(process.cwd(), 'ui/styles.css'), 'utf8');
+  assert.match(styles, /\.app-shell\.status-open \.automation-fleet-row\.transport \.compact-field-grid\s*\{/);
 });
 
 test('automatic execution avoids a redundant Profile authority RPC read', async () => {

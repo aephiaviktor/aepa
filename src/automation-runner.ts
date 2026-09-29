@@ -6,6 +6,15 @@ const FAST_FOLLOW_AFTER_CONFIRM_MS = 2_500;
 const DEADLINE_RECHECK_DELAY_MS = 2_500;
 const MIN_REFRESH_INTERVAL_MS = 15_000;
 const MAX_CONTINUED_ACTIONS = 4;
+const MAX_STALE_PLAN_REFRESHES = 2;
+const STALE_PLAN_REFRESH_DELAY_MS = 1_000;
+
+function isRefreshablePlanStateError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const value = error as { code?: unknown; message?: unknown };
+  return value.code === 'ACTION_PRECONDITION_FAILED'
+    && !isPostSubmissionFailure(String(value.message ?? ''));
+}
 
 /** True when a paused assignment can be retried automatically: the pause is
  * plan-stage (nothing was submitted) and never a post-submission failure,
@@ -79,6 +88,7 @@ export class AutomaticCopperRunner {
     private readonly database: AepaDatabase,
     private readonly executeStep: (assignment: AutomationAssignmentRecord) => Promise<AutomaticStepOutcome>,
     private readonly nowUnixSeconds: () => bigint = () => BigInt(Math.floor(Date.now() / 1_000)),
+    private readonly wait: (delayMs: number) => Promise<void> = delayMs => new Promise(resolve => setTimeout(resolve, delayMs)),
   ) {}
 
   async tick(): Promise<AutomaticTickResult> {
@@ -113,7 +123,16 @@ export class AutomaticCopperRunner {
     try {
       let lastConfirmed: Extract<AutomaticTickResult, { kind: 'confirmed' }> | undefined;
       for (let continued = 0; continued < MAX_CONTINUED_ACTIONS; continued++) {
-        const outcome = await this.executeStep(assignment);
+        let outcome: AutomaticStepOutcome;
+        for (let refresh = 0; ; refresh++) {
+          try {
+            outcome = await this.executeStep(assignment);
+            break;
+          } catch (error) {
+            if (!isRefreshablePlanStateError(error) || refresh >= MAX_STALE_PLAN_REFRESHES) throw error;
+            await this.wait(STALE_PLAN_REFRESH_DELAY_MS);
+          }
+        }
         if (outcome.kind === 'waiting') {
           this.waitingUntil.set(assignment.fleetAddress, outcome.untilUnixSeconds);
           if (outcome.untilUnixSeconds <= this.nowUnixSeconds()) {
